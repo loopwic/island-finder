@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://island-finder.local/schemas/controller-command.json",
+  "title": "Island Finder controller command",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "button", "hold_ms"],
+  "properties": {
+    "type": {
+      "const": "press"
+    },
+    "button": {
+      "enum": [
+        "A",
+        "B",
+        "X",
+        "Y",
+        "L",
+        "R",
+        "PLUS",
+        "MINUS",
+        "HOME",
+        "UP",
+        "DOWN",
+        "LEFT",
+        "RIGHT"
+      ]
+    },
+    "hold_ms": {
+      "type": "integer",
+      "minimum": 20,
+      "maximum": 2000
+    }
+  }
+}
