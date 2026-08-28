@@ -1,0 +1,50 @@
+[
+  {
+    "name": "明藻",
+    "pinyin": ["ming", "zao"],
+    "mode": "chinese",
+    "valid": true
+  },
+  {
+    "name": "Nook",
+    "pinyin": [],
+    "mode": "english",
+    "valid": true
+  },
+  {
+    "name": "明藻",
+    "pinyin": ["ming"],
+    "mode": "chinese",
+    "valid": false
+  },
+  {
+    "name": "明nook",
+    "pinyin": ["ming"],
+    "mode": "unsupported",
+    "valid": false
+  },
+  {
+    "name": "nook!",
+    "pinyin": [],
+    "mode": "unsupported",
+    "valid": false
+  },
+  {
+    "name": "nook 2",
+    "pinyin": [],
+    "mode": "unsupported",
+    "valid": false
+  },
+  {
+    "name": "abcdefghijk",
+    "pinyin": [],
+    "mode": "unsupported",
+    "valid": false
+  },
+  {
+    "name": "",
+    "pinyin": [],
+    "mode": "empty",
+    "valid": false
+  }
+]

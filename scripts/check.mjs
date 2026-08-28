@@ -29,7 +29,3 @@ run(npmCommand, ['run', 'test'], '前端测试');
 run(npmCommand, ['run', 'vision:test'], 'Python/OpenCV 与控制器测试');
 run(npmCommand, ['run', 'build'], 'TypeScript 与生产构建');
 run(npmCommand, ['run', 'controller:self-test'], 'PABotBase2 协议自检');
-
-if (process.platform === 'darwin') {
-  run(npmCommand, ['run', 'controller:build:native'], 'macOS Swift 兼容构建');
-}

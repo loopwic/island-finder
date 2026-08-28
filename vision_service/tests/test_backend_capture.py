@@ -23,11 +23,14 @@ from backend import (
     RestartRequired,
     SettingsStore,
     TRANSITION_RETRY_LIMIT,
+    commands_for_english_character,
     _default_data_dir,
     _devices_from_system_profiler,
     _usb_details_from_ioreg,
     effective_capture_mode,
+    name_input_mode,
     resolve_capture_device,
+    validate_name,
     validate_settings,
 )
 
@@ -163,6 +166,86 @@ def test_long_windows_directshow_identity_is_not_truncated() -> None:
 
 def test_uvc_capture_defaults_to_full_30_fps_preview():
     assert DEFAULT_SETTINGS["captureFps"] == 30
+
+
+NAME_INPUT_CASES = json.loads(
+    (Path(__file__).resolve().parents[2] / "contracts" / "name-input-cases.json").read_text(
+        encoding="utf-8"
+    )
+)
+
+
+@pytest.mark.parametrize("case", NAME_INPUT_CASES, ids=lambda case: case["name"] or "empty")
+def test_name_input_contract_is_shared_with_the_frontend(case):
+    identity = {"name": case["name"], "namePinyin": case["pinyin"]}
+
+    assert name_input_mode(identity) == case["mode"]
+    if case["valid"]:
+        assert validate_name(identity) == case["mode"]
+    else:
+        with pytest.raises(ValueError):
+            validate_name(identity)
+
+
+def test_settings_normalize_english_names_to_the_lowercase_keyboard_output():
+    settings = copy.deepcopy(DEFAULT_SETTINGS)
+    settings["identity"]["name"] = "Nook"
+
+    validated = validate_settings(settings)
+
+    assert validated["identity"]["name"] == "nook"
+
+
+def test_english_character_plan_uses_the_observed_keyboard_cursor():
+    commands, cursor = commands_for_english_character("K", "1")
+
+    assert cursor == "k"
+    assert commands[-1]["button"] == "A"
+    assert all(command["button"] != "PLUS" for command in commands)
+
+
+def test_english_name_flow_reads_back_each_letter_and_never_enters_candidate_selection():
+    settings = copy.deepcopy(DEFAULT_SETTINGS)
+    settings["identity"].update({"name": "nook", "namePinyin": []})
+    command_batches: list[list[dict[str, object]]] = []
+    controller = SimpleNamespace(run=lambda commands: command_batches.append(commands))
+    engine = AutomationEngine(
+        lambda: settings,
+        SimpleNamespace(),  # type: ignore[arg-type]
+        controller,  # type: ignore[arg-type]
+        SimpleNamespace(),  # type: ignore[arg-type]
+        lambda _snapshot: None,
+        lambda _level, _message: None,
+    )
+    observations = iter(
+        [
+            {"nameValue": "", "nameScore": 0.0, "selectedKey": "1", "selectedKeyConfidence": 0.9},
+            {"nameValue": "n", "nameScore": 0.95, "selectedKey": "n", "selectedKeyConfidence": 0.9},
+            {"nameValue": "no", "nameScore": 0.95, "selectedKey": "o", "selectedKeyConfidence": 0.9},
+            {"nameValue": "noo", "nameScore": 0.95, "selectedKey": "o", "selectedKeyConfidence": 0.9},
+            {"nameValue": "nook", "nameScore": 0.95, "selectedKey": "k", "selectedKeyConfidence": 0.9},
+        ]
+    )
+
+    def poll_keyboard(_character, predicate, _failure_message, **_kwargs):
+        state = next(observations)
+        assert predicate(state)
+        return state
+
+    engine._poll_keyboard = poll_keyboard  # type: ignore[method-assign]
+    engine._find_name_candidate_across_pages = (  # type: ignore[method-assign]
+        lambda _character: pytest.fail("英文姓名不应进入中文候选栏")
+    )
+
+    engine._enter_name()
+
+    buttons = [command["button"] for batch in command_batches for command in batch]
+    assert buttons.count("B") == 10
+    assert buttons.count("A") == 4
+    assert buttons.count("PLUS") == 1
+    assert "R" not in buttons
+    assert engine.transition_retry is not None
+    assert engine.transition_retry["screenKind"] == "nameKeyboard"
 
 
 def test_calibrated_map_regions_contain_measured_1080p_map_bounds_with_small_padding():
@@ -425,6 +508,97 @@ def _keyboard_observation(
         "nameValue": "明zao",
         "index": 10,
     }
+
+
+def _candidate_page(
+    signature: str,
+    *,
+    matched: bool = False,
+    index: int | None = None,
+    layout: str = "singleCharacters",
+):
+    texts = [""] * 15
+    if matched and index is not None:
+        texts[index] = "藻"
+    return {
+        "layout": layout,
+        "matched": matched,
+        "index": index,
+        "confidence": 0.96 if matched else 0.0,
+        "margin": 0.45 if matched else 0.0,
+        "texts": texts,
+        "pageSignature": signature,
+    }
+
+
+def test_chinese_candidate_search_pages_once_and_returns_the_later_match():
+    engine, logs = _recognition_retry_engine()
+    presses: list[str] = []
+    engine.controller = SimpleNamespace(
+        press=lambda button, _hold_ms, _after_ms: presses.append(button)
+    )  # type: ignore[assignment]
+    stable_pages = iter(
+        [_candidate_page("page-1"), _candidate_page("page-2", matched=True, index=4)]
+    )
+    engine._find_stable_name_candidate = lambda _character: next(stable_pages)  # type: ignore[method-assign]
+    engine._wait_for_candidate_page_change = (  # type: ignore[method-assign]
+        lambda _character, _signature: _candidate_page("page-2")
+    )
+
+    result = engine._find_name_candidate_across_pages("藻")
+
+    assert result["index"] == 4
+    assert presses == ["R"]
+    assert any("切到下一页" in message for _level, message in logs)
+
+
+def test_candidate_page_change_waits_for_two_stable_new_frames(monkeypatch):
+    monkeypatch.setattr(backend.time, "sleep", lambda _seconds: None)
+    engine, _logs = _recognition_retry_engine()
+    observations = iter(
+        [
+            _candidate_page("page-1"),
+            _candidate_page("page-2"),
+            _candidate_page("page-2"),
+        ]
+    )
+    engine._keyboard_frame = lambda *_args: next(observations)  # type: ignore[method-assign]
+
+    result = engine._wait_for_candidate_page_change("藻", "page-1")
+
+    assert result["pageSignature"] == "page-2"
+
+
+def test_candidate_page_change_retries_capture_errors_without_repressing_r(monkeypatch):
+    monkeypatch.setattr(backend.time, "sleep", lambda _seconds: None)
+    engine, logs = _recognition_retry_engine()
+    calls = 0
+
+    def keyboard_frame(*_args):
+        nonlocal calls
+        calls += 1
+        if calls <= 12:
+            raise RuntimeError("temporary capture timeout")
+        return _candidate_page("page-2")
+
+    engine._keyboard_frame = keyboard_frame  # type: ignore[method-assign]
+
+    result = engine._wait_for_candidate_page_change("藻", "page-1")
+
+    assert result["pageSignature"] == "page-2"
+    assert len(logs) == 1
+    assert "不重复按 R" in logs[0][1]
+
+
+def test_candidate_page_change_stops_immediately_on_phrase_layout(monkeypatch):
+    monkeypatch.setattr(backend.time, "sleep", lambda _seconds: None)
+    engine, _logs = _recognition_retry_engine()
+    engine._keyboard_frame = (  # type: ignore[method-assign]
+        lambda *_args: _candidate_page("phrase-page", layout="phrases")
+    )
+
+    with pytest.raises(RestartRequired, match="翻页后进入词语模式"):
+        engine._wait_for_candidate_page_change("藻", "page-1")
 
 
 def test_keyboard_recognition_retries_low_confidence_without_replaying_input(monkeypatch):

@@ -1,6 +1,6 @@
 # Island Finder
 
-Island Finder 是一个只在本机运行的《集合啦！动物森友会》开局选岛系统。它从 UVC 采集卡读取 Switch 画面，由 Python/OpenCV 判断当前页面、输入预先配置的中文姓名与生日、快速推进对话，并分析四张候选地图。候选岛满足全部硬条件且达到阈值后，系统只移动光标并进入 `awaitingDecision`，最终保留或放弃由用户决定。
+Island Finder 是一个只在本机运行的《集合啦！动物森友会》开局选岛系统。它从 UVC 采集卡读取 Switch 画面，由 Python/OpenCV 判断当前页面、输入预先配置的中文或英文姓名与生日、快速推进对话，并分析四张候选地图。候选岛满足全部硬条件且达到阈值后，系统只移动光标并进入 `awaitingDecision`，最终保留或放弃由用户决定。
 
 [![CI](https://github.com/loopwic/island-finder/actions/workflows/ci.yml/badge.svg)](https://github.com/loopwic/island-finder/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -88,7 +88,7 @@ npm run controller:self-test
 ## 使用流程
 
 1. 在“设备与识别”中选择按名称显示的 UVC 采集设备，并确认画面为 1920×1080。
-2. 配置中文姓名、每个字对应的无声调拼音、生日和初始人物样式。
+2. 配置纯中文或纯英文姓名、生日和初始人物样式；中文姓名还需为每个字填写无声调拼音。
 3. 首次运行保持演练模式，确认名字候选、生日游标、人物页面与四岛页面都能稳定识别。
 4. 设置综合分阈值和连续命中帧数。任何硬条件失败时，降低综合阈值也不会放行。
 5. 关闭演练模式前确认 PABotBase2 已连接、Switch 2 能收到输入且所有按键都会自动释放。
@@ -139,12 +139,11 @@ src/
   app/                    前端后端状态同步与操作上下文
   backend/                本地 HTTP API 客户端
   components/             HeroUI/Tailwind 控制台
-  controller/             拼音键盘与生日按键路径规划
   domain/                 前端配置与运行状态类型
   routes/                 TanStack Router 三个工作页面
   vision/                 目标参考图的浏览器端特征提取
+contracts/                前端与后端共同执行的行为契约样例
 vision_service/           OpenCV 识别、状态机、跨平台手柄服务、审计与测试
-native/macos-controller/  旧 macOS Swift 控制器兼容实现
 scripts/                  Node 跨平台启动/检查与 macOS 原生采集入口
 docs/                     架构、画面与控制链路说明
 firmware/                 本地按键命令 JSON Schema

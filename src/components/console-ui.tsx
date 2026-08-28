@@ -36,6 +36,7 @@ import {
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { backend } from '../backend/client';
 import { useConsole } from '../app/console-context';
+import { detectNameInputMode } from '../domain/name-input';
 import type { RuntimePhase, RuntimeSnapshot, ScreenKind } from '../domain/types';
 
 const phaseLabels: Record<RuntimePhase, string> = {
@@ -328,6 +329,8 @@ export function IdentityCard() {
     updatePinyin,
   } = useConsole();
   const characters = Array.from(settings.identity.name);
+  const nameInputMode = detectNameInputMode(settings.identity.name);
+  const nameInvalid = settingsLoaded && ['empty', 'unsupported'].includes(nameInputMode);
 
   return (
     <section aria-busy={!settingsLoaded} className="space-y-4 p-4 md:p-5">
@@ -353,17 +356,24 @@ export function IdentityCard() {
         <TextField
           fullWidth
           isDisabled={active || !settingsLoaded}
-          isInvalid={settingsLoaded && characters.length === 0}
+          isInvalid={nameInvalid}
           value={settings.identity.name}
           onChange={updateName}
         >
-          <Label>中文名字</Label>
-          <Input placeholder="例如：小森" />
-          <Description>最多 10 个汉字；逐字提供拼音即可</Description>
-          {settingsLoaded && characters.length === 0 && <ErrorMessage>请输入岛民名字</ErrorMessage>}
+          <Label>岛民名字</Label>
+          <Input placeholder="例如：小森 / nook" />
+          <Description>
+            {nameInputMode === 'chinese'
+              ? '中文逐字填写拼音；候选不在当前页时会自动翻页'
+              : '支持 1–10 个汉字或纯英文字母；英文会统一为小写，不支持数字和符号'}
+          </Description>
+          {settingsLoaded && nameInputMode === 'empty' && <ErrorMessage>请输入岛民名字</ErrorMessage>}
+          {settingsLoaded && nameInputMode === 'unsupported' && (
+            <ErrorMessage>请使用全中文或纯英文字母，不要中英混输、输入数字或符号</ErrorMessage>
+          )}
         </TextField>
 
-        {characters.length > 0 && (
+        {nameInputMode === 'chinese' && (
           <div className="grid grid-cols-2 gap-3">
             {characters.map((character, index) => (
               <TextField

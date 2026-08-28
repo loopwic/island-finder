@@ -31,7 +31,7 @@ macOS 使用 `scripts/capture-stream.swift` 和 `scripts/run-capture-stream.sh`�
 
 ### 控制器服务
 
-`vision_service/controller_server.py` 与 `pabotbase2.py` 是 macOS/Windows 共用的 Python 服务。它通过 pyserial 与 PABotBase2/ESP32-S3 通信，等待固件执行完成后才返回 HTTP 成功，并在取消或退出时发送全释放。`native/macos-controller/` 仅作为已经实机验证过的协议参考和 macOS 兼容构建，不再是默认运行时。
+`vision_service/controller_server.py` 与 `pabotbase2.py` 是 macOS/Windows 共用的唯一控制器服务。它通过 pyserial 与 PABotBase2/ESP32-S3 通信，等待固件执行完成后才返回 HTTP 成功，并在取消或退出时发送全释放。控制协议由 Python 自检与跨平台 CI 保护，不再保留第二套 Swift 控制器实现。
 
 ## 状态与安全门禁
 
@@ -69,7 +69,7 @@ idle → restarting/fastForwarding → enteringName → enteringBirthday
 
 - npm 依赖使用精确版本并由 `package-lock.json` 固定。
 - Python 运行时直接使用 `uv`，依赖由 `uv.lock` 固定；Windows 专用依赖通过平台标记安装。
-- Swift Package 仅在 macOS 的统一检查中作为协议兼容实现构建，Windows 不依赖 Swift。
+- macOS 只在 AVFoundation 视频采集链路使用 Swift；控制器服务与 Windows 共用 Python 实现。
 - `npm run check` 是本地质量门禁，覆盖前端测试、后端与控制器测试、类型/生产构建和协议自检。
 
 修改地图算法时，应先向 Pytest 加入审计裁切回归，再用 `vision:reanalyze-audits` 对现有证据重算。不得在浏览器端增加另一个地图评分实现。

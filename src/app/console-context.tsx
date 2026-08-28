@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { backend, type BackendState } from '../backend/client';
-import { normalizePinyin, validateChineseName } from '../controller/keyboard';
+import { detectNameInputMode, normalizePinyin, validateName } from '../domain/name-input';
 import { DEFAULT_SETTINGS, INITIAL_RUNTIME } from '../domain/defaults';
 import { loadSettings } from '../domain/storage';
 import type { FinderSettings } from '../domain/types';
@@ -33,7 +33,7 @@ const ConsoleContext = createContext<ConsoleContextValue | null>(null);
 
 function isIdentityReady(identity: FinderSettings['identity']): boolean {
   try {
-    validateChineseName(identity.name, identity.namePinyin);
+    validateName(identity.name, identity.namePinyin);
     return true;
   } catch {
     return false;
@@ -160,14 +160,17 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   };
 
   const updateName = (value: string) => {
-    const name = Array.from(value).slice(0, 10).join('');
+    const truncated = Array.from(value).slice(0, 10).join('');
+    const name = /^[a-z]*$/i.test(truncated) ? truncated.toLowerCase() : truncated;
     if (!markSettingsDirty()) return;
     setSettings((current) => ({
       ...current,
       identity: {
         ...current.identity,
         name,
-        namePinyin: Array.from(name).map((_, index) => current.identity.namePinyin[index] ?? ''),
+        namePinyin: detectNameInputMode(name) === 'english'
+          ? []
+          : Array.from(name).map((_, index) => current.identity.namePinyin[index] ?? ''),
       },
     }));
   };

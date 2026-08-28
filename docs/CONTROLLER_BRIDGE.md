@@ -29,7 +29,7 @@ npm run controller:diagnose
 npm run controller:self-test
 ```
 
-控制器实现位于 `vision_service/pabotbase2.py` 与 `vision_service/controller_server.py`；旧 Swift 版本及其协议说明保留在 [native/macos-controller/README.md](../native/macos-controller/README.md) 作为兼容参考。
+控制器实现仅位于 `vision_service/pabotbase2.py` 与 `vision_service/controller_server.py`，macOS 与 Windows 共用同一份协议和状态机。
 
 默认会优先选择描述中包含 ESP32、USB Serial、UART、CP210 或 CH340 的串口。在 Windows 上需要固定端口时使用：
 

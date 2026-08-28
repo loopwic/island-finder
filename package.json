@@ -30,7 +30,6 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "node scripts/check.mjs",
-    "controller:build:native": "cd native/macos-controller && swift build -c release",
     "controller:start": "uv run --frozen python vision_service/controller_server.py",
     "controller:diagnose": "uv run --frozen python vision_service/controller_server.py --diagnose",
     "controller:self-test": "uv run --frozen python vision_service/controller_server.py --self-test",

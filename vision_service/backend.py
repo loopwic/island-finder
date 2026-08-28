@@ -201,7 +201,12 @@ def validate_settings(settings: dict[str, Any]) -> dict[str, Any]:
     identity = settings.get("identity")
     if not isinstance(identity, dict):
         raise ValueError("身份配置无效")
-    identity["name"] = str(identity.get("name", ""))[:10]
+    normalized_name = str(identity.get("name", "")).strip()[:10]
+    identity["name"] = (
+        normalized_name.lower()
+        if re.fullmatch(r"[A-Za-z]+", normalized_name)
+        else normalized_name
+    )
     pinyin = identity.get("namePinyin", [])
     if not isinstance(pinyin, list):
         raise ValueError("姓名拼音必须是数组")
@@ -487,17 +492,34 @@ def _is_han(character: str) -> bool:
     return "CJK UNIFIED IDEOGRAPH" in name or "CJK COMPATIBILITY IDEOGRAPH" in name
 
 
-def validate_chinese_name(identity: dict[str, Any]) -> None:
+def name_input_mode(identity: dict[str, Any]) -> str:
+    characters = list(str(identity.get("name", "")).strip())
+    if not characters:
+        return "empty"
+    if len(characters) > 10:
+        return "unsupported"
+    if all(_is_han(character) for character in characters):
+        return "chinese"
+    if re.fullmatch(r"[A-Za-z]+", "".join(characters)):
+        return "english"
+    return "unsupported"
+
+
+def validate_name(identity: dict[str, Any]) -> str:
     characters = list(str(identity.get("name", "")).strip())
     if not 1 <= len(characters) <= 10:
-        raise ValueError("名字需要 1–10 个汉字")
-    if not all(_is_han(character) for character in characters):
-        raise ValueError("中文自动输入目前只支持汉字名字")
+        raise ValueError("名字需要 1–10 个字符")
+    mode = name_input_mode(identity)
+    if mode == "english":
+        return mode
+    if mode != "chinese":
+        raise ValueError("名字仅支持全中文或纯英文字母，不支持中英混输、数字和符号")
     pinyin = identity.get("namePinyin", [])
     for index, character in enumerate(characters):
         value = normalize_pinyin(str(pinyin[index] if index < len(pinyin) else ""))
         if not re.fullmatch(r"[a-zv]{1,6}", value):
             raise ValueError(f"请填写“{character}”的拼音（不带声调）")
+    return mode
 
 
 def press(button: str, hold_ms: int = 80, after_ms: int = 160) -> dict[str, Any]:
@@ -573,6 +595,15 @@ def commands_for_pinyin(value: str, cursor: str = "1") -> tuple[list[dict[str, A
         current = character
     commands[-1] = press("A", 45, 420)
     return commands, current
+
+
+def commands_for_english_character(character: str, cursor: str) -> tuple[list[dict[str, Any]], str]:
+    normalized = character.lower()
+    if not re.fullmatch(r"[a-z]", normalized):
+        raise ValueError("英文名字只能输入英文字母")
+    commands = [press(button, 45, 72) for button in _path_between(cursor, normalized)]
+    commands.append(press("A", 45, 260))
+    return commands, normalized
 
 
 def commands_to_candidate_row(last_key: str) -> list[dict[str, Any]]:
@@ -1547,7 +1578,7 @@ class AutomationEngine:
 
     def start(self) -> None:
         settings = self._settings()
-        validate_chinese_name(settings["identity"])
+        validate_name(settings["identity"])
         self.controller.set_dry_run(bool(settings["dryRun"]))
         if not settings["dryRun"] and not self.controller.connected:
             if settings.get("autoConnectController", True):
@@ -1948,7 +1979,7 @@ class AutomationEngine:
     def _keyboard_frame(self, character: str, scope: str = "full", target_index: int | None = None) -> dict[str, Any]:
         frame, _sequence = self.capture.latest()
         if frame is None:
-            raise RuntimeError("采集卡画面尚未就绪，无法识别中文候选栏")
+            raise RuntimeError("采集卡画面尚未就绪，无法识别姓名键盘")
         result = recognize_keyboard_frame(frame, character, scope, target_index)
         result["target"] = character
         result["visionEngine"] = "rapidocr"
@@ -2040,6 +2071,7 @@ class AutomationEngine:
         self.handled_name = True
         self._patch(phase="enteringName", lastMessage="正在输入预设名字")
         identity = self._settings()["identity"]
+        mode = validate_name(identity)
         characters = list(identity["name"].strip())
         self._log("info", f"输入名字：{identity['name']}")
         self._patch(lastMessage="正在清除键盘切页时可能残留的输入")
@@ -2055,6 +2087,9 @@ class AutomationEngine:
             scope="name",
         )
         cursor = keyboard["selectedKey"]
+        if mode == "english":
+            self._enter_english_name("".join(characters).lower(), cursor)
+            return
         confirmed_name = ""
         for index, character in enumerate(characters):
             pinyin = normalize_pinyin(identity["namePinyin"][index])
@@ -2124,25 +2159,102 @@ class AutomationEngine:
         self._patch(phase="fastForwarding")
         self._arm_transition_retry("nameKeyboard", "PLUS", "提交名字")
 
+    def _enter_english_name(self, name: str, cursor: str) -> None:
+        confirmed_name = ""
+        for character in name:
+            self._patch(lastMessage=f"正在输入英文名字：{confirmed_name}{character}")
+            commands, cursor = commands_for_english_character(character, cursor)
+            self.controller.run(commands)
+            confirmed_name += character
+            keyboard = self._poll_keyboard(
+                character,
+                lambda state, expected=confirmed_name: self._name_value_matches(
+                    state["nameValue"], state["nameScore"], expected
+                )
+                and state["selectedKey"] is not None
+                and state["selectedKeyConfidence"] >= 0.28,
+                f"输入英文后，OCR 未在姓名框读回“{confirmed_name}”",
+                stable_hits=2,
+                reject_phrases=False,
+                attempts=10,
+                scope="name",
+            )
+            cursor = keyboard["selectedKey"]
+            self._log("success", f"姓名框 OCR 已确认：{confirmed_name}")
+        self.controller.run([press("PLUS", 80, 500)])
+        self._patch(phase="fastForwarding")
+        self._arm_transition_retry("nameKeyboard", "PLUS", "提交名字")
+
     def _find_name_candidate_across_pages(self, character: str) -> dict[str, Any]:
         visited: set[str] = set()
-        latest: dict[str, Any] | None = None
+        latest = self._find_stable_name_candidate(character)
         for page_index in range(MAX_CANDIDATE_PAGES):
             self._patch(lastMessage=f"本地 OCR 正在识别“{character}”的第 {page_index + 1} 页候选")
-            latest = self._find_stable_name_candidate(character)
             if latest["matched"] and latest["index"] is not None:
                 return latest
             visible = "、".join(text for text in latest["texts"] if text) or "未读出文字"
-            self._log("info", f"第 {page_index + 1} 页未找到“{character}”（{visible}），切到下一页")
             if latest["pageSignature"] in visited:
+                self._log("warning", f"候选页已循环，仍未找到“{character}”，停止继续翻页")
                 break
             visited.add(latest["pageSignature"])
             if page_index + 1 >= MAX_CANDIDATE_PAGES:
                 break
+            self._log("info", f"第 {page_index + 1} 页未找到“{character}”（{visible}），切到下一页")
             self.controller.press("R", 80, 520)
-        if latest:
-            return {**latest, "matched": False, "index": None}
-        raise RestartRequired(f"本地 OCR 未返回候选字“{character}”的识别结果")
+            self._wait_for_candidate_page_change(
+                character,
+                str(latest["pageSignature"]),
+            )
+            latest = self._find_stable_name_candidate(character)
+        return {**latest, "matched": False, "index": None}
+
+    def _wait_for_candidate_page_change(
+        self,
+        character: str,
+        previous_signature: str,
+    ) -> dict[str, Any]:
+        latest: dict[str, Any] | None = None
+        changed_signature = ""
+        stable_hits = 0
+        attempts_per_round = 12
+        last_error: Exception | None = None
+        for retry_round in range(RECOGNITION_RETRY_LIMIT + 1):
+            for _attempt in range(attempts_per_round):
+                try:
+                    latest = self._keyboard_frame(character, "scan")
+                    last_error = None
+                except Exception as error:  # noqa: BLE001 - capture/OCR hiccups are retryable
+                    last_error = error
+                    changed_signature, stable_hits = "", 0
+                    time.sleep(KEYBOARD_OCR_POLL_SECONDS)
+                    continue
+                if latest["layout"] == "phrases":
+                    raise RestartRequired(
+                        f"候选栏翻页后进入词语模式，无法按单字安全定位“{character}”"
+                    )
+                signature = str(latest["pageSignature"])
+                if signature and signature != previous_signature:
+                    if signature == changed_signature:
+                        stable_hits += 1
+                    else:
+                        changed_signature, stable_hits = signature, 1
+                    if stable_hits >= 2:
+                        return latest
+                else:
+                    changed_signature, stable_hits = "", 0
+                time.sleep(KEYBOARD_OCR_POLL_SECONDS)
+            if retry_round < RECOGNITION_RETRY_LIMIT:
+                self._log(
+                    "warning",
+                    f"候选栏翻页画面尚未稳定；只重新采样，不重复按 R "
+                    f"({retry_round + 1}/{RECOGNITION_RETRY_LIMIT})",
+                )
+                time.sleep(RECOGNITION_RETRY_BASE_SECONDS * (1 + retry_round * 0.5))
+        error_detail = f"；最近一次识别异常：{last_error}" if last_error else ""
+        raise RestartRequired(
+            f"候选栏按 R 后未可靠切换到下一页{error_detail}；"
+            f"已完成 {RECOGNITION_RETRY_LIMIT} 轮重试"
+        )
 
     def _find_stable_name_candidate(self, character: str) -> dict[str, Any]:
         latest: dict[str, Any] | None = None

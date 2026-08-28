@@ -121,28 +121,6 @@ export type RuntimeSnapshot = {
   stableHitCount: number;
 };
 
-export type ControllerButton =
-  | 'A'
-  | 'B'
-  | 'X'
-  | 'Y'
-  | 'L'
-  | 'R'
-  | 'PLUS'
-  | 'MINUS'
-  | 'HOME'
-  | 'UP'
-  | 'DOWN'
-  | 'LEFT'
-  | 'RIGHT';
-
-export type ControllerCommand = {
-  type: 'press';
-  button: ControllerButton;
-  holdMs?: number;
-  afterMs?: number;
-};
-
 export type LogLevel = 'info' | 'success' | 'warning' | 'error';
 
 export type RuntimeLog = {
