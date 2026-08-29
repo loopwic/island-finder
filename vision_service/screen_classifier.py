@@ -169,6 +169,11 @@ def _keyboard_grid(gray: np.ndarray) -> tuple[int, int, float]:
 def _map_card_score(card: np.ndarray) -> float:
     if card.size == 0:
         return 0.0
+    value = cv2.cvtColor(card, cv2.COLOR_BGR2HSV)[:, :, 2]
+    bright_reference = float(np.percentile(value, 90))
+    brightness_scale = min(2.4, max(1.0, 150.0 / max(1.0, bright_reference)))
+    if brightness_scale > 1.02:
+        card = cv2.convertScaleAbs(card, alpha=brightness_scale)
     blue, green, red = cv2.split(card)
     water = (
         (green.astype(np.int16) > red.astype(np.int16) + 10)
@@ -210,6 +215,13 @@ def classify_screen(
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
     dark = value <= 34
+    dark_dialogue_bright = (value >= 150) & (saturation <= 90)
+    dark_dialogue_yellow = (
+        (hue >= 15)
+        & (hue <= 40)
+        & (saturation >= 90)
+        & (value >= 90)
+    )
     # HDMI limited-range capture and the game's inactive/transition dimming can
     # lower the same cream dialogue bubble by roughly 35-45 value points.
     cream = (value >= 108) & (saturation <= 104)
@@ -235,7 +247,31 @@ def classify_screen(
     bright_neutral = (saturation <= 42) & (value >= 190)
     system_neutral = (saturation <= 48) & (value >= 140)
     loading_corner_color = _fraction(colorful, (0.80, 0.70, 0.20, 0.30))
+    dark_dialogue_text = _fraction(
+        dark_dialogue_bright,
+        (0.20, 0.56, 0.60, 0.28),
+    )
+    dark_dialogue_cursor = _fraction(
+        dark_dialogue_yellow,
+        (0.40, 0.78, 0.20, 0.18),
+    )
     if dark_ratio >= 0.92 or (luminance_mean <= 0.075 and luminance_std <= 0.08):
+        if dark_dialogue_text >= 0.004 and dark_dialogue_cursor >= 0.004:
+            return ScreenResult(
+                "dialogue",
+                _clamp01(
+                    0.72
+                    + min(dark_dialogue_text, 0.02) * 8
+                    + min(dark_dialogue_cursor, 0.02) * 6
+                ),
+                {
+                    "dark": dark_ratio,
+                    "luminance": luminance_mean,
+                    "variation": luminance_std,
+                    "darkDialogueText": dark_dialogue_text,
+                    "darkDialogueCursor": dark_dialogue_cursor,
+                },
+            )
         if loading_corner_color >= 0.018:
             return ScreenResult(
                 "loading",

@@ -62,6 +62,7 @@ TRANSITION_RETRY_LIMIT = 3
 TRANSITION_RETRY_BASE_SECONDS = 1.2
 ADVANCE_STALL_PRESS_LIMIT = 12
 ADVANCE_STALL_MAX_DELTA = 0.01
+UNRECOGNIZED_RESTART_SECONDS = 12.0
 
 
 INITIAL_RUNTIME: dict[str, Any] = {
@@ -1053,6 +1054,7 @@ class AutomationEngine:
         self.advance_watch_kind = ""
         self.advance_watch_signature: np.ndarray | None = None
         self.advance_watch_presses = 0
+        self.unrecognized_since: float | None = None
         self.active_audit_id: str | None = None
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, name="automation-engine", daemon=True)
@@ -1092,6 +1094,7 @@ class AutomationEngine:
         self._reset_map_stability()
         self.transition_retry = None
         self._reset_advance_watch()
+        self.unrecognized_since = None
         self.last_advance_at = 0
         self.active_audit_id = None
 
@@ -1531,15 +1534,30 @@ class AutomationEngine:
             self.stable_screen_hits = 1 if screen["confidence"] >= 0.58 else 0
 
         if screen["kind"] in {"noSignal", "loading"}:
+            self.unrecognized_since = None
             message = "采集画面无信号，已停止发送按键" if screen["kind"] == "noSignal" else "画面正在加载，等待稳定"
             if state["lastMessage"] != message:
                 self._patch(lastMessage=message)
             return
         if screen["kind"] == "unknown" or screen["confidence"] < 0.58:
+            current_time = time.monotonic()
+            if self.unrecognized_since is None:
+                self.unrecognized_since = current_time
+            unrecognized_seconds = current_time - self.unrecognized_since
+            if unrecognized_seconds >= UNRECOGNIZED_RESTART_SECONDS:
+                reason = (
+                    "页面连续 "
+                    f"{round(unrecognized_seconds)} 秒无法可靠识别，判定本轮卡住"
+                )
+                self.unrecognized_since = None
+                self._log("warning", reason)
+                self._spawn(lambda: self._restart(reason))
+                return
             message = f"页面未可靠识别（{round(screen['confidence'] * 100)}%），等待下一帧"
             if state["lastMessage"] != message:
                 self._patch(lastMessage=message)
             return
+        self.unrecognized_since = None
         if self.stable_screen_hits < 2:
             self._patch(lastMessage=f"正在确认当前页面：{screen['kind']}")
             return
