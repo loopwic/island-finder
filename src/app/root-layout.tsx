@@ -7,8 +7,10 @@ import {
   Map,
   Moon,
   Power,
+  RefreshCw,
   ScanSearch,
   Sun,
+  WifiOff,
 } from "lucide-react";
 import { useEffect } from "react";
 import { useConsole } from "./console-context";
@@ -44,12 +46,21 @@ function ThemeButton() {
 export function RootLayout() {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (routerState) => routerState.location.pathname });
-  const { runtime, notice, ready, runAction } = useConsole();
+  const {
+    runtime,
+    notice,
+    ready,
+    connectionStatus,
+    connectionError,
+    runAction,
+    reconnect,
+  } = useConsole();
   const isSettings = pathname === "/settings";
   const isAudit = pathname === "/audit";
   const isWorkbench = !isSettings && !isAudit;
   const pageTitle = isSettings ? "设备与识别" : isAudit ? "选图审计" : "运行控制台";
   const automationEnabled = !["idle", "error"].includes(runtime.phase);
+  const backendConnected = connectionStatus === "connected";
 
   return (
     <div className="bg-background text-foreground min-h-screen lg:grid lg:grid-cols-[16rem_minmax(0,1fr)]">
@@ -114,7 +125,7 @@ export function RootLayout() {
                 isIconOnly
                 aria-label={automationEnabled ? "停止自动选岛" : "开始自动选岛"}
                 aria-pressed={automationEnabled}
-                isDisabled={!automationEnabled && !ready}
+                isDisabled={!backendConnected || (!automationEnabled && !ready)}
                 size="sm"
                 variant={automationEnabled ? "secondary" : "ghost"}
                 onPress={() => void runAction(automationEnabled ? "stop" : "start")}
@@ -127,6 +138,42 @@ export function RootLayout() {
             </Tooltip>
           </div>
         </header>
+
+        {!backendConnected && (
+          <div className="mx-auto w-full max-w-375 px-3 pt-3 md:px-4 lg:px-5">
+            <Alert status={connectionStatus === "disconnected" ? "danger" : "warning"} role="alert">
+              <Alert.Indicator>
+                {connectionStatus === "disconnected" ? (
+                  <WifiOff aria-hidden="true" size={18} />
+                ) : (
+                  <RefreshCw aria-hidden="true" className="animate-spin" size={18} />
+                )}
+              </Alert.Indicator>
+              <Alert.Content>
+                <Alert.Title>
+                  {connectionStatus === "disconnected"
+                    ? "后端连接已中断"
+                    : connectionStatus === "recovering"
+                      ? "后端正在自动恢复"
+                      : "正在连接后端"}
+                </Alert.Title>
+                <Alert.Description>
+                  {connectionError ?? "桌面窗口会保持打开，恢复后自动继续读取状态。"}
+                </Alert.Description>
+              </Alert.Content>
+              <Button
+                className="shrink-0"
+                size="sm"
+                variant="secondary"
+                isDisabled={connectionStatus === "connecting"}
+                onPress={() => void reconnect()}
+              >
+                <RefreshCw aria-hidden="true" size={15} />
+                重新连接
+              </Button>
+            </Alert>
+          </div>
+        )}
 
         <main className="mx-auto w-full max-w-375 p-3 md:p-4 lg:p-5">
           <Outlet />

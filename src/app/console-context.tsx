@@ -1,5 +1,11 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { backend, type BackendState } from '../backend/client';
+import {
+  nextConnectionPollDelay,
+  statusAfterFailure,
+  type BackendConnectionStatus,
+} from '../backend/connection';
+import { restartDesktopRuntime } from '../backend/desktop-runtime';
 import { detectNameInputMode, normalizePinyin, validateName } from '../domain/name-input';
 import { DEFAULT_SETTINGS, INITIAL_RUNTIME } from '../domain/defaults';
 import { loadSettings } from '../domain/storage';
@@ -16,6 +22,8 @@ type ConsoleContextValue = {
   controller: BackendState['controller'];
   logs: BackendState['logs'];
   notice: string | null;
+  connectionStatus: BackendConnectionStatus;
+  connectionError: string | null;
   active: boolean;
   identityReady: boolean;
   ready: boolean;
@@ -27,6 +35,7 @@ type ConsoleContextValue = {
   addTargets: (files: FileList | null) => Promise<void>;
   removeTarget: (id: string) => void;
   clearLogs: () => Promise<void>;
+  reconnect: () => Promise<void>;
 };
 
 const ConsoleContext = createContext<ConsoleContextValue | null>(null);
@@ -46,56 +55,115 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [settingsSyncState, setSettingsSyncState] = useState<'loading' | 'saving' | 'saved' | 'error'>('loading');
   const [notice, setNotice] = useState<string | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState<BackendConnectionStatus>('connecting');
+  const [connectionError, setConnectionError] = useState<string | null>(null);
   const settingsHydrated = useRef(false);
   const settingsDirty = useRef(false);
   const settingsEditRevision = useRef(0);
   const saveTimer = useRef<number | null>(null);
+  const refreshState = useRef<((syncSettings?: boolean) => Promise<boolean>) | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    let failures = 0;
+    let pollTimer: number | null = null;
+    let inFlight: Promise<boolean> | null = null;
 
-    const refresh = async (showError = false, syncSettings = false) => {
-      try {
-        let next = await backend.state();
-        if (cancelled) return;
-
-        if (!settingsHydrated.current) {
-          const local = loadSettings();
-          if (!next.settings.identity.name && local.identity.name) {
-            const migrated = await backend.saveSettings({ ...next.settings, ...local });
-            if (cancelled) return;
-            next = { ...next, settings: migrated };
-            setNotice('已将浏览器里的旧配置迁移到常驻后端');
-          }
-          setSettings(next.settings);
-          settingsHydrated.current = true;
-          settingsDirty.current = false;
-          setSettingsLoaded(true);
-          setSettingsSyncState('saved');
-        } else if (syncSettings && !settingsDirty.current) {
-          setSettings(next.settings);
-          setSettingsSyncState('saved');
-        }
-        setState(next);
-      } catch (error) {
-        if (!cancelled) {
-          setState(null);
-          if (showError) setNotice(error instanceof Error ? error.message : String(error));
-        }
-      }
+    const scheduleNext = (status: BackendConnectionStatus) => {
+      if (cancelled) return;
+      if (pollTimer !== null) window.clearTimeout(pollTimer);
+      pollTimer = window.setTimeout(
+        () => void refresh(),
+        nextConnectionPollDelay(status),
+      );
     };
 
-    const syncSettingsOnFocus = () => void refresh(false, true);
+    const refresh = (syncSettings = false): Promise<boolean> => {
+      if (inFlight) return inFlight;
+      if (pollTimer !== null) {
+        window.clearTimeout(pollTimer);
+        pollTimer = null;
+      }
 
-    void refresh(true, true);
-    const interval = window.setInterval(() => void refresh(false), 500);
+      const operation = (async () => {
+        try {
+          let next = await backend.state();
+          if (cancelled) return false;
+
+          if (!settingsHydrated.current) {
+            const local = loadSettings();
+            if (!next.settings.identity.name && local.identity.name) {
+              const migrated = await backend.saveSettings({ ...next.settings, ...local });
+              if (cancelled) return false;
+              next = { ...next, settings: migrated };
+              setNotice('已将浏览器里的旧配置迁移到常驻后端');
+            }
+            setSettings(next.settings);
+            settingsHydrated.current = true;
+            settingsDirty.current = false;
+            setSettingsLoaded(true);
+            setSettingsSyncState('saved');
+          } else if (syncSettings && !settingsDirty.current) {
+            setSettings(next.settings);
+            setSettingsSyncState('saved');
+          }
+          failures = 0;
+          setState(next);
+          setConnectionStatus('connected');
+          setConnectionError(null);
+          return true;
+        } catch (error) {
+          if (cancelled) return false;
+          failures += 1;
+          const message = error instanceof Error ? error.message : String(error);
+          const status = statusAfterFailure(failures);
+          setConnectionStatus(status);
+          setConnectionError(message);
+          return false;
+        } finally {
+          inFlight = null;
+          if (!cancelled) {
+            const status = failures === 0 ? 'connected' : statusAfterFailure(failures);
+            scheduleNext(status);
+          }
+        }
+      })();
+      inFlight = operation;
+      return operation;
+    };
+
+    const syncSettingsOnFocus = () => void refresh(true);
+
+    refreshState.current = refresh;
+    void refresh(true);
     window.addEventListener('focus', syncSettingsOnFocus);
     return () => {
       cancelled = true;
-      window.clearInterval(interval);
+      refreshState.current = null;
+      if (pollTimer !== null) window.clearTimeout(pollTimer);
       window.removeEventListener('focus', syncSettingsOnFocus);
     };
   }, []);
+
+  const reconnect = async () => {
+    setConnectionStatus('connecting');
+    setConnectionError(null);
+    try {
+      const runtimeRestartRequested = await restartDesktopRuntime();
+      if (runtimeRestartRequested) {
+        setConnectionStatus('recovering');
+        await new Promise((resolve) => window.setTimeout(resolve, 600));
+      }
+      const connected = await refreshState.current?.(true);
+      if (connected === false && !runtimeRestartRequested) {
+        setConnectionStatus('disconnected');
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setConnectionStatus('disconnected');
+      setConnectionError(message);
+    }
+  };
 
   useEffect(() => {
     if (!notice) return;
@@ -273,6 +341,8 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       controller,
       logs,
       notice,
+      connectionStatus,
+      connectionError,
       active,
       identityReady,
       ready,
@@ -284,6 +354,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       addTargets,
       removeTarget,
       clearLogs,
+      reconnect,
     }}>
       {children}
     </ConsoleContext.Provider>

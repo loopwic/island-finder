@@ -18,6 +18,7 @@ from analyzer import analyze_map
 from backend import BackendRuntime
 from birthday_ocr import recognize_birthday
 from candidate_ocr import recognize_keyboard_frame
+from parent_watch import start_parent_watch
 from screen_classifier import classify_screen
 
 
@@ -419,6 +420,7 @@ def main() -> int:
 
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
+    start_parent_watch(lambda: shutdown(0, None))
     print(f"Island headless backend listening on http://{args.host}:{args.port}")
     try:
         server.serve_forever()

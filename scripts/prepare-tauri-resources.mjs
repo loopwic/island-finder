@@ -1,4 +1,4 @@
-import { access, chmod, copyFile, cp, mkdir, rm } from 'node:fs/promises';
+import { access, chmod, copyFile, cp, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -30,6 +30,7 @@ async function findUv() {
 await rm(resourcesRoot, { recursive: true, force: true });
 await mkdir(path.join(runtimeRoot, 'scripts'), { recursive: true });
 await mkdir(path.join(runtimeRoot, 'bin'), { recursive: true });
+await writeFile(path.join(resourcesRoot, '.gitkeep'), '\n');
 
 await cp(path.join(projectRoot, 'vision_service'), path.join(runtimeRoot, 'vision_service'), {
   recursive: true,

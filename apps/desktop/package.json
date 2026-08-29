@@ -1,9 +1,12 @@
 {
   "name": "@island-finder/desktop",
   "private": true,
-  "version": "0.1.2",
+  "version": "0.1.3",
   "scripts": {
+    "runtime:prepare": "node ../../scripts/prepare-tauri-resources.mjs",
+    "predev": "npm run runtime:prepare",
     "dev": "tauri dev",
+    "prestart": "npm run runtime:prepare",
     "start": "tauri dev --no-watch",
     "bundle": "node ../../scripts/prepare-tauri-resources.mjs && node ../../scripts/build-desktop.mjs",
     "check": "cargo check --locked --manifest-path src-tauri/Cargo.toml",

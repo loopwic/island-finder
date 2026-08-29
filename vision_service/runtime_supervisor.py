@@ -76,7 +76,11 @@ def _wait_for_port(port: int, process: subprocess.Popen[bytes], timeout: float) 
 def _spawn(spec: ServiceSpec) -> subprocess.Popen[bytes]:
     options: dict[str, object] = {
         "cwd": PROJECT_ROOT,
-        "env": {**os.environ, "PYTHONUNBUFFERED": "1"},
+        "env": {
+            **os.environ,
+            "PYTHONUNBUFFERED": "1",
+            "ISLAND_FINDER_SUPERVISOR_PID": str(os.getpid()),
+        },
         "stdin": subprocess.DEVNULL,
         "stdout": None,
         "stderr": None,

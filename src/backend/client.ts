@@ -155,6 +155,9 @@ async function request<T>(path: string, init?: RequestInit, timeoutMs = 8_000): 
     if (controller.signal.aborted) {
       throw new Error(`后端请求超过 ${Math.round(timeoutMs / 1_000)} 秒，请重试`);
     }
+    if (reason instanceof TypeError) {
+      throw new Error('无法连接本机后端，系统正在尝试恢复');
+    }
     throw reason;
   } finally {
     globalThis.clearTimeout(timeout);
@@ -162,7 +165,7 @@ async function request<T>(path: string, init?: RequestInit, timeoutMs = 8_000): 
 }
 
 export const backend = {
-  state: () => request<BackendState>('/v1/state'),
+  state: () => request<BackendState>('/v1/state', undefined, 2_500),
   captureDevices: () => request<CaptureDevicesResponse>('/v1/capture-devices'),
   auditHistory: () => request<AuditHistoryResponse>('/v1/audits'),
   audit: (auditId: string) => request<SelectionAudit>(`/v1/audits/${encodeURIComponent(auditId)}`),

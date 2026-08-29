@@ -11,6 +11,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from pabotbase2 import ControllerError, PABotBase2Bridge, protocol_self_test
+from parent_watch import start_parent_watch
 
 
 HOST = "127.0.0.1"
@@ -176,6 +177,7 @@ def main(argv: list[str] | None = None) -> int:
 
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
+    start_parent_watch(lambda: shutdown(0, None))
     print(f"Island Controller Service 已启动：http://{args.host}:{args.port}")
     print("支持 macOS 与 Windows；连接 PABotBase2 后再启用真实控制。")
     try:

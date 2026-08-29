@@ -1,4 +1,4 @@
-import { StrictMode } from 'react';
+import { StrictMode, useEffect, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   createRootRoute,
@@ -8,6 +8,7 @@ import {
   RouterProvider,
 } from '@tanstack/react-router';
 import { ConsoleProvider } from './app/console-context';
+import { AppErrorBoundary } from './app/app-error-boundary';
 import { RootLayout } from './app/root-layout';
 import './styles.css';
 
@@ -43,8 +44,26 @@ declare module '@tanstack/react-router' {
   }
 }
 
+function DesktopReloadBoundary({ children }: { children: ReactNode }) {
+  useEffect(() => {
+    const reloadWithShortcut = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'r') return;
+      event.preventDefault();
+      window.location.reload();
+    };
+    window.addEventListener('keydown', reloadWithShortcut);
+    return () => window.removeEventListener('keydown', reloadWithShortcut);
+  }, []);
+
+  return children;
+}
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <RouterProvider router={router} />
+    <DesktopReloadBoundary>
+      <AppErrorBoundary>
+        <RouterProvider router={router} />
+      </AppErrorBoundary>
+    </DesktopReloadBoundary>
   </StrictMode>,
 );

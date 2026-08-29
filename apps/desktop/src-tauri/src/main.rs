@@ -16,6 +16,14 @@ use tauri::{Manager, RunEvent, WindowEvent};
 
 const CONTROLLER_PORT: u16 = 32_145;
 const VISION_PORT: u16 = 48_197;
+const RUNTIME_RESTART_LIMIT: usize = 3;
+
+#[derive(Clone)]
+struct RuntimeLaunch {
+    resource_dir: Option<PathBuf>,
+    app_data_dir: Option<PathBuf>,
+    app_cache_dir: Option<PathBuf>,
+}
 
 #[derive(Clone, Default)]
 struct RuntimeProcess {
@@ -25,10 +33,22 @@ struct RuntimeProcess {
 #[derive(Default)]
 struct RuntimeProcessInner {
     child: Mutex<Option<Child>>,
+    launch: Mutex<Option<RuntimeLaunch>>,
     stopping: AtomicBool,
+    restart_requested: AtomicBool,
+    monitor_started: AtomicBool,
+    recovery_exhausted: AtomicBool,
 }
 
 impl RuntimeProcess {
+    fn configure(&self, launch: RuntimeLaunch) {
+        *self
+            .inner
+            .launch
+            .lock()
+            .expect("runtime launch lock poisoned") = Some(launch);
+    }
+
     fn install(&self, child: Child) {
         *self
             .inner
@@ -37,61 +57,24 @@ impl RuntimeProcess {
             .expect("runtime child lock poisoned") = Some(child);
     }
 
-    fn monitor(&self, app: tauri::AppHandle) {
-        let runtime = self.clone();
-        thread::spawn(move || {
-            loop {
-                thread::sleep(Duration::from_millis(250));
-                let exit_status = {
-                    let mut guard = runtime
-                        .inner
-                        .child
-                        .lock()
-                        .expect("runtime child lock poisoned");
-                    let Some(child) = guard.as_mut() else {
-                        return;
-                    };
-                    match child.try_wait() {
-                        Ok(Some(status)) => {
-                            guard.take();
-                            Some(status)
-                        }
-                        Ok(None) => None,
-                        Err(error) => {
-                            eprintln!("无法读取 Island Finder 运行时状态：{error}");
-                            guard.take();
-                            return app.exit(1);
-                        }
-                    }
-                };
-                if let Some(status) = exit_status {
-                    if !runtime.inner.stopping.load(Ordering::SeqCst) {
-                        if status.success() {
-                            println!("Island Finder 运行时已由外部安全停止。退出桌面应用。")
-                        } else {
-                            eprintln!("Island Finder 运行时意外退出：{status}");
-                        }
-                        app.exit(status.code().unwrap_or(1));
-                    }
-                    return;
-                }
-            }
-        });
+    fn request_restart(&self) -> Result<(), String> {
+        if self.inner.stopping.load(Ordering::SeqCst) {
+            return Err("桌面应用正在退出，无法重新连接后端".to_string());
+        }
+        self.inner.restart_requested.store(true, Ordering::SeqCst);
+        self.inner.recovery_exhausted.store(false, Ordering::SeqCst);
+        Ok(())
     }
 
-    fn shutdown(&self) {
-        if self.inner.stopping.swap(true, Ordering::SeqCst) {
-            return;
-        }
-        let child = self
-            .inner
+    fn take_child(&self) -> Option<Child> {
+        self.inner
             .child
             .lock()
             .expect("runtime child lock poisoned")
-            .take();
-        let Some(mut child) = child else {
-            return;
-        };
+            .take()
+    }
+
+    fn stop_child(mut child: Child) {
         if let Some(mut stdin) = child.stdin.take() {
             let _ = stdin.write_all(b"shutdown\n");
             let _ = stdin.flush();
@@ -107,6 +90,135 @@ impl RuntimeProcess {
         let _ = child.kill();
         let _ = child.wait();
     }
+
+    fn spawn_with_retries(&self) -> bool {
+        let launch = self
+            .inner
+            .launch
+            .lock()
+            .expect("runtime launch lock poisoned")
+            .clone();
+        let Some(launch) = launch else {
+            eprintln!("Island Finder 运行时缺少启动配置，无法恢复。");
+            return false;
+        };
+
+        for attempt in 1..=RUNTIME_RESTART_LIMIT {
+            if self.inner.stopping.load(Ordering::SeqCst) {
+                return false;
+            }
+            if attempt > 1 {
+                thread::sleep(Duration::from_secs((attempt - 1) as u64));
+            }
+            match spawn_runtime(&launch) {
+                Ok(child) => {
+                    if self.inner.stopping.load(Ordering::SeqCst) {
+                        Self::stop_child(child);
+                        return false;
+                    }
+                    self.install(child);
+                    println!("Island Finder 运行时已在第 {attempt} 次尝试恢复。");
+                    return true;
+                }
+                Err(error) => {
+                    eprintln!(
+                        "Island Finder 运行时第 {attempt}/{RUNTIME_RESTART_LIMIT} 次恢复失败：{error}"
+                    );
+                }
+            }
+        }
+        eprintln!("Island Finder 运行时三轮恢复均失败，桌面窗口保持打开以便手动重试。");
+        false
+    }
+
+    fn recover(&self) {
+        let recovered = self.spawn_with_retries();
+        self.inner
+            .recovery_exhausted
+            .store(!recovered, Ordering::SeqCst);
+    }
+
+    fn monitor(&self) {
+        if self.inner.monitor_started.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let runtime = self.clone();
+        thread::spawn(move || {
+            loop {
+                thread::sleep(Duration::from_millis(250));
+                if runtime.inner.stopping.load(Ordering::SeqCst) {
+                    return;
+                }
+                if runtime
+                    .inner
+                    .restart_requested
+                    .swap(false, Ordering::SeqCst)
+                {
+                    if let Some(child) = runtime.take_child() {
+                        Self::stop_child(child);
+                    }
+                    runtime.recover();
+                    continue;
+                }
+
+                let child_result = {
+                    let mut guard = runtime
+                        .inner
+                        .child
+                        .lock()
+                        .expect("runtime child lock poisoned");
+                    let Some(child) = guard.as_mut() else {
+                        drop(guard);
+                        if !runtime.inner.recovery_exhausted.load(Ordering::SeqCst) {
+                            runtime.recover();
+                        }
+                        continue;
+                    };
+                    match child.try_wait() {
+                        Ok(Some(status)) => {
+                            guard.take();
+                            Ok(Some(status))
+                        }
+                        Ok(None) => Ok(None),
+                        Err(error) => {
+                            guard.take();
+                            Err(error)
+                        }
+                    }
+                };
+                match child_result {
+                    Ok(Some(status)) => {
+                        if !runtime.inner.stopping.load(Ordering::SeqCst) {
+                            eprintln!("Island Finder 运行时已退出（{status}），开始安全恢复。");
+                            runtime.recover();
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("无法读取 Island Finder 运行时状态：{error}；开始安全恢复。");
+                        runtime.recover();
+                    }
+                    Ok(None) => {}
+                }
+            }
+        });
+    }
+
+    fn shutdown(&self) {
+        if self.inner.stopping.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        self.inner.restart_requested.store(false, Ordering::SeqCst);
+        self.inner.recovery_exhausted.store(true, Ordering::SeqCst);
+        let Some(child) = self.take_child() else {
+            return;
+        };
+        Self::stop_child(child);
+    }
+}
+
+#[tauri::command]
+fn restart_runtime(runtime: tauri::State<'_, RuntimeProcess>) -> Result<(), String> {
+    runtime.request_restart()
 }
 
 fn find_project_root(start: &Path) -> Option<PathBuf> {
@@ -179,12 +291,8 @@ fn wait_until_ready(child: &mut Child, timeout: Duration) -> io::Result<()> {
     ))
 }
 
-fn spawn_runtime(
-    resource_dir: Option<&Path>,
-    app_data_dir: Option<&Path>,
-    app_cache_dir: Option<&Path>,
-) -> io::Result<Child> {
-    let (root, bundled) = project_root(resource_dir)?;
+fn spawn_runtime(launch: &RuntimeLaunch) -> io::Result<Child> {
+    let (root, bundled) = project_root(launch.resource_dir.as_deref())?;
     let supervisor = root.join("vision_service/runtime_supervisor.py");
     let bundled_uv = root
         .join("bin")
@@ -194,9 +302,13 @@ fn spawn_runtime(
         .unwrap_or_else(|| "uv".into());
     let mut command = Command::new(uv);
     if bundled {
-        let data_root = app_data_dir
+        let data_root = launch
+            .app_data_dir
+            .as_deref()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "无法确定应用数据目录"))?;
-        let cache_root = app_cache_dir
+        let cache_root = launch
+            .app_cache_dir
+            .as_deref()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "无法确定应用缓存目录"))?;
         let settings_dir = data_root.join("data");
         let environment_dir = data_root.join("venv");
@@ -236,17 +348,15 @@ fn main() {
     let runtime = RuntimeProcess::default();
     let app = tauri::Builder::default()
         .manage(runtime.clone())
+        .invoke_handler(tauri::generate_handler![restart_runtime])
         .setup(move |app| {
-            let resource_dir = app.path().resource_dir()?;
-            let app_data_dir = app.path().app_data_dir()?;
-            let app_cache_dir = app.path().app_cache_dir()?;
-            let child = spawn_runtime(
-                Some(&resource_dir),
-                Some(&app_data_dir),
-                Some(&app_cache_dir),
-            )?;
-            runtime.install(child);
-            runtime.monitor(app.handle().clone());
+            let launch = RuntimeLaunch {
+                resource_dir: Some(app.path().resource_dir()?),
+                app_data_dir: Some(app.path().app_data_dir()?),
+                app_cache_dir: Some(app.path().app_cache_dir()?),
+            };
+            runtime.configure(launch);
+            runtime.monitor();
             Ok(())
         })
         .build(tauri::generate_context!())
