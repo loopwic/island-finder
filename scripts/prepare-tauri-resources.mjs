@@ -1,4 +1,5 @@
 import { access, chmod, copyFile, cp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -62,6 +63,29 @@ for (const source of [
 }
 
 await copyFile(await findUv(), path.join(runtimeRoot, 'bin', executableName));
+if (process.platform === 'darwin') {
+  const nativeCapture = path.join(runtimeRoot, 'bin', 'capture-stream');
+  const compile = spawnSync(
+    '/usr/bin/xcrun',
+    [
+      'swiftc',
+      '-O',
+      path.join(projectRoot, 'scripts/capture-stream.swift'),
+      '-o',
+      nativeCapture,
+      '-framework',
+      'AVFoundation',
+      '-framework',
+      'VideoToolbox',
+    ],
+    { stdio: 'inherit' },
+  );
+  if (compile.error) throw compile.error;
+  if (compile.status !== 0) {
+    throw new Error(`macOS 原生采集程序编译失败（退出码 ${compile.status ?? '未知'}）`);
+  }
+  await chmod(nativeCapture, 0o755);
+}
 if (process.platform !== 'win32') {
   await chmod(path.join(runtimeRoot, 'bin', executableName), 0o755);
   await chmod(path.join(runtimeRoot, 'scripts/run-capture-stream.sh'), 0o755);

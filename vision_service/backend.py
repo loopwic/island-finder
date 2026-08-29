@@ -501,6 +501,8 @@ class _NativeJPEGSource:
 
     def __init__(self, process: subprocess.Popen[bytes]) -> None:
         self.process = process
+        self._started_at = time.monotonic()
+        self._received_frame = False
 
     def _read_exact(self, size: int, timeout: float) -> bytes:
         if self.process.stdout is None:
@@ -525,13 +527,20 @@ class _NativeJPEGSource:
 
     def read(self) -> tuple[bool, np.ndarray | None, bytes | None]:
         try:
-            length = struct.unpack(">I", self._read_exact(4, 3.0))[0]
+            # A packaged macOS launch can spend several seconds waiting for
+            # AVFoundation to initialize the external UVC graph.  Give only
+            # the first frame a wider deadline; steady-state frame loss still
+            # fails fast so the normal reconnect watchdog remains responsive.
+            first_frame_timeout = max(3.0, 12.0 - (time.monotonic() - self._started_at))
+            timeout = 3.0 if self._received_frame else first_frame_timeout
+            length = struct.unpack(">I", self._read_exact(4, timeout))[0]
             if length < 128 or length > self.MAX_FRAME_BYTES:
                 raise ValueError(f"原生采集帧长度无效：{length}")
             encoded = self._read_exact(length, 3.0)
             # Keep the native JPEG compressed until a recognition scan needs a
             # decoded frame. The preview forwards this payload directly at the
             # requested frame rate without a second JPEG encode in Python.
+            self._received_frame = True
             return True, None, encoded
         except (EOFError, OSError, TimeoutError, ValueError):
             return False, None, None
@@ -1044,6 +1053,7 @@ class AutomationEngine:
         self.stable_key = ""
         self.reject_stable_key = ""
         self.reject_stable_hits = 0
+        self.reject_miss_hits = 0
         self.scan_sample_count = 0
         self.stable_screen_kind = "unknown"
         self.stable_screen_hits = 0
@@ -1088,6 +1098,7 @@ class AutomationEngine:
         self.stable_key = ""
         self.reject_stable_key = ""
         self.reject_stable_hits = 0
+        self.reject_miss_hits = 0
         self.scan_sample_count = 0
         self.stable_screen_kind = "unknown"
         self.stable_screen_hits = 0
@@ -1606,8 +1617,23 @@ class AutomationEngine:
         settings = self._settings()
         self.scan_sample_count += 1
         best = max(candidates, key=lambda candidate: float(candidate["score"]))
-        key = f"{best['cardIndex']}:{best.get('targetId') or 'criteria'}"
-        hit = bool(best["hardPass"]) and float(best["score"]) >= float(settings["threshold"])
+        eligible = [
+            candidate
+            for candidate in candidates
+            if bool(candidate["hardPass"])
+            and float(candidate["score"]) >= float(settings["threshold"])
+        ]
+        selected = (
+            max(eligible, key=lambda candidate: float(candidate["score"]))
+            if eligible
+            else None
+        )
+        key = (
+            ""
+            if selected is None
+            else f"{selected['cardIndex']}:{selected.get('targetId') or 'criteria'}"
+        )
+        hit = selected is not None
         if hit and key == self.stable_key:
             self._patch(stableHitCount=int(self.snapshot["stableHitCount"]) + 1)
         else:
@@ -1616,7 +1642,9 @@ class AutomationEngine:
         if hit:
             self.reject_stable_key = ""
             self.reject_stable_hits = 0
+            self.reject_miss_hits = 0
         else:
+            self.reject_miss_hits += 1
             # Rejection needs the same per-card hard-failure conclusion on
             # consecutive scans. Merely counting frames can discard a valid
             # island when one factor crosses a segmentation boundary for a
@@ -1637,8 +1665,9 @@ class AutomationEngine:
                 self.reject_stable_key = rejection_signature
                 self.reject_stable_hits = 1
         stable_hits = int(self.snapshot["stableHitCount"])
+        decision_candidate = selected or best
         summary = (
-            f"地图 {int(best['cardIndex']) + 1} 已通过硬条件，稳定判定 {stable_hits}/{int(settings['stableFrames'])}"
+            f"地图 {int(decision_candidate['cardIndex']) + 1} 已通过硬条件，稳定判定 {stable_hits}/{int(settings['stableFrames'])}"
             if hit
             else (
                 f"地图 {int(best['cardIndex']) + 1} 当前最高 {float(best['score']) * 100:.1f}%，"
@@ -1651,15 +1680,21 @@ class AutomationEngine:
             decisionCandidates=candidates,
             stableHitCount=stable_hits,
             rejectStableHitCount=self.reject_stable_hits,
+            rejectMissHitCount=self.reject_miss_hits,
             scanSampleCount=self.scan_sample_count,
         )
         if hit and stable_hits >= int(settings["stableFrames"]):
-            self._spawn(lambda: self._present_candidate(best))
+            assert selected is not None
+            self._spawn(lambda: self._present_candidate(selected))
             return
+        rejection_limit = max(6, int(settings["stableFrames"]) * 3)
         if (
             not hit
             and settings["autoReject"]
-            and self.reject_stable_hits >= int(settings["stableFrames"])
+            and (
+                self.reject_stable_hits >= int(settings["stableFrames"])
+                or self.reject_miss_hits >= rejection_limit
+            )
         ):
             failures = [factor for factor in best["factors"] if factor["hard"] and not factor["passed"]]
             reason = (
