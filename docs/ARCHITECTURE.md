@@ -11,11 +11,19 @@
 
 ## 运行组件
 
+根 `package.json` 使用 npm workspaces 描述桌面壳、Web、视觉和控制器四个工程单元。Tauri 是交互运行时的唯一所有者；Turbo 负责 Web HMR、构建、测试、类型检查和控制器自检，不直接启动会发送真实输入的 Python 服务。
+
+### Tauri 桌面壳与运行监督器
+
+`apps/desktop/` 提供 Tauri 2 桌面窗口、应用图标和进程生命周期。启动时 Rust 主进程只创建一个 `vision_service/runtime_supervisor.py` 子进程，并等待控制器与视觉端口同时就绪；关闭窗口、Tauri 退出或 supervisor 异常退出时，桌面进程一并退出。
+
+Supervisor 在 macOS 与 Windows 上使用同一份 Python 实现，分别启动控制器与视觉后端，监视父进程和子进程，并在任何退出路径上先请求控制器全释放与停止配对。它只在 `127.0.0.1:32146` 暴露带服务身份和当前项目绝对路径的控制接口，供 `npm run stop` 安全停止；未知端口占用不会被自动结束。
+
 ### Web 控制台
 
 `src/` 使用 React、TanStack Router、HeroUI 和 Tailwind。它负责资料配置、设备选择、状态展示、审计查看和候选决策。地图框、页面锚点和地图评分不属于浏览器职责。
 
-浏览器在开发环境连接 `127.0.0.1:48197`；生产构建由同一后端直接提供，避免另起静态文件服务。
+浏览器在开发环境连接 `127.0.0.1:48197`；生产构建输出到 `apps/web/dist/` 并由同一后端直接提供，避免另起静态文件服务。
 
 ### 视觉后端
 
@@ -55,15 +63,11 @@ idle → restarting/fastForwarding → enteringName → enteringBirthday
 
 ## 启动与停止
 
-`scripts/run-stack.mjs` 是唯一全栈入口，可由 macOS 或 Windows 上的 npm 调用，支持 `dev`、`production` 和 `headless`。它会：
+`npm run dev` 启动 Tauri、Vite HMR 和 Python supervisor；`npm start` 使用相同桌面链路但关闭 Rust 文件监听；`npm run start:headless` 只启动 supervisor，并明确开启视觉后端自动运行。`npm run stop` 可从任意终端请求当前 supervisor 安全退出。
 
-1. 检查外部命令和端口；
-2. 启动 Python PABotBase2 控制器并等待健康端点；
-3. 启动 Python 后端并等待 `/health`；
-4. 开发模式启动 Vite HMR，生产模式使用后端静态页面；
-5. 收到退出信号时终止自己创建的全部子进程。
+每次启动会先检查 supervisor 控制口、控制器端口和视觉端口。只有控制口同时返回正确服务标识与当前项目路径时，才允许回收旧运行时；其他占用一律报错。Tauri 通过可写 stdin 和父 PID 双向约束 supervisor，supervisor 再监视两个 Python 子服务，因此正常关闭、崩溃、外部停止和下次预清理都覆盖同一释放路径。
 
-它不会杀死占用端口的未知进程。这样既避免双实例向 Switch 发送输入，也不会误停用户正在使用的服务。
+网页不能只凭轮询得到的实例 ID 开始自动化。当前页面必须先调用 `arm-start` 取得有效期 5 秒的一次性令牌，再立即提交 `start`；令牌无论成功或失败都会消费。这一门禁避免遗留浏览器页面在新后端启动后误触发真实按键。
 
 ## 依赖与质量
 

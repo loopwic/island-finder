@@ -10,11 +10,11 @@ Island Finder 是一个只在本机运行的《集合啦！动物森友会》开
 ## 系统边界
 
 ```text
-React + TanStack Router + HeroUI 控制台
-                │ HTTP / MJPEG（仅 127.0.0.1）
-Python/OpenCV 常驻后端 ─── AVFoundation（macOS）/ DirectShow（Windows）
-                │ HTTP（仅 127.0.0.1:32145）
-Python 控制器服务 ─── ESP32-S3 / PABotBase2 ─── Switch 2
+Tauri 桌面应用 ─── React + TanStack Router + HeroUI 控制台
+       │                         │ HTTP / MJPEG（仅 127.0.0.1）
+       └── Python 运行监督器 ─── Python/OpenCV 常驻后端
+                      │          └── AVFoundation（macOS）/ DirectShow（Windows）
+                      └── Python 控制器服务 ─── ESP32-S3 / PABotBase2 ─── Switch 2
 ```
 
 - Python 后端是识别、状态机、地图裁切和评分的唯一来源；浏览器不再维护第二套地图规则。
@@ -29,10 +29,11 @@ Python 控制器服务 ─── ESP32-S3 / PABotBase2 ─── Switch 2
 - macOS 13 或更新版本，或 Windows 10/11 x64
 - Node.js 22.12 或更新版本、npm 10 或更新版本
 - Python 3.11/3.12 与 [`uv`](https://docs.astral.sh/uv/getting-started/installation/)
+- Rust stable 工具链；macOS 还需 Xcode Command Line Tools，Windows 还需 Microsoft C++ Build Tools 与 WebView2
 - Switch / Switch 2、UVC HDMI 采集卡
 - 真实输入需要 ESP32-S3 双 USB 口开发板：UART/COM 接电脑，USB/OTG 接 Switch 2
 
-macOS 会使用项目内的 AVFoundation 原生采集优化，因此在 macOS 上还需要 Xcode Command Line Tools/Swift。Windows 不需要 Swift，摄像头名称和硬件 ID 由 DirectShow 枚举，画面由 OpenCV 读取。
+macOS 会使用项目内的 AVFoundation 原生采集优化，因此还需要 Swift。Windows 不需要 Swift，摄像头名称和硬件 ID 由 DirectShow 枚举，画面由 OpenCV 读取。Tauri 的平台依赖请按[官方先决条件](https://v2.tauri.app/start/prerequisites/)安装。
 
 依赖版本由 `package-lock.json` 与 `uv.lock` 固定。首次安装：
 
@@ -49,36 +50,52 @@ npm run dev
 
 ## 启动方式
 
-开发模式（含 Vite HMR、视觉后端与手柄服务）：
+开发模式会打开 Tauri 桌面窗口，同时启动 Vite HMR、视觉后端与手柄服务：
 
 ```bash
 npm run dev
 ```
 
-打开 `http://127.0.0.1:4173/`。生产模式会先执行类型检查和前端构建，再由视觉后端提供静态页面：
+不监听 Rust 源码变更的桌面模式：
 
 ```bash
 npm start
 ```
 
-打开 `http://127.0.0.1:48197/`。不需要网页的自动启动模式：
+构建当前平台的桌面可执行文件：
+
+```bash
+npm run desktop:build
+```
+
+不打开桌面窗口、并立即开始自动流程的无人值守模式：
 
 ```bash
 npm run start:headless
 ```
 
-统一启动器不会清理或抢占已被使用的端口；发现已有服务会直接报错退出，避免同时运行两套自动化。端口约定如下：
+从另一个终端安全停止当前桌面运行时及其全部后端：
+
+```bash
+npm run stop
+```
+
+Tauri 是交互运行的唯一进程所有者。它只启动一个 `runtime_supervisor.py` 子进程，后者再托管视觉后端和控制器；窗口关闭、Tauri 退出、后端异常或 `npm run stop` 都会先发送 `release-all` 和停止配对，再结束子进程。再次启动时只会回收能同时证明服务身份和当前项目绝对路径的旧 supervisor，绝不会按端口或 PID 盲目结束未知程序。前端开始按钮还使用 5 秒、单次消费的当前页面令牌，旧网页不能从轮询状态中取得启动权限。
+
+Turborepo 只负责编排 Web HMR、构建、测试和缓存，不再直接托管会向 Switch 发送输入的 Python 服务。端口约定如下：
 
 | 服务 | 地址 |
 |---|---|
 | Vite HMR | `127.0.0.1:4173` |
 | Python/OpenCV 后端与生产页面 | `127.0.0.1:48197` |
 | Python/PABotBase2 手柄服务 | `127.0.0.1:32145` |
+| Supervisor 安全控制口 | `127.0.0.1:32146` |
 
 单独维护某一层时可使用：
 
 ```bash
 npm run dev:web
+npm run runtime:start
 npm run vision:start
 npm run controller:start
 npm run controller:diagnose
@@ -118,7 +135,9 @@ npm run check
 - Pytest/OpenCV 后端测试；
 - TypeScript 类型检查与 Vite 生产构建；
 - PABotBase2 协议和跨平台控制器 HTTP 契约自检；
-- macOS 上额外执行旧 Swift 控制器兼容构建。
+- Rust/Tauri 桌面进程管理器编译检查；
+- Rustfmt 与 Clippy（警告视为失败）；
+- GitHub Actions 在 macOS、Windows 上分别执行全仓质量门禁和 Tauri release 构建。
 
 常用的独立命令：
 
@@ -135,6 +154,10 @@ npm run controller:self-test
 ## 目录
 
 ```text
+apps/desktop/            Tauri 桌面壳、应用图标与安全生命周期管理
+apps/web/                Web workspace 清单与生产构建产物
+services/controller/     PABotBase2 控制器维护 workspace
+services/vision/         Python/OpenCV 视觉维护 workspace
 src/
   app/                    前端后端状态同步与操作上下文
   backend/                本地 HTTP API 客户端
@@ -143,13 +166,14 @@ src/
   routes/                 TanStack Router 三个工作页面
   vision/                 目标参考图的浏览器端特征提取
 contracts/                前端与后端共同执行的行为契约样例
-vision_service/           OpenCV 识别、状态机、跨平台手柄服务、审计与测试
-scripts/                  Node 跨平台启动/检查与 macOS 原生采集入口
+vision_service/           OpenCV 识别、状态机、运行监督器、跨平台手柄服务、审计与测试
+scripts/                  检查、外部安全停止与 macOS 原生采集入口
+turbo.json                Web HMR、构建、测试与缓存规则
 docs/                     架构、画面与控制链路说明
 firmware/                 本地按键命令 JSON Schema
 ```
 
-`node_modules/`、`.venv/`、`dist/` 和 `.build/` 都是可重建产物，不属于源码并已加入 `.gitignore`。
+`node_modules/`、`.venv/`、`apps/web/dist/`、`apps/desktop/src-tauri/target/`、`.turbo/` 和 `.build/` 都是可重建产物，不属于源码并已加入 `.gitignore`。
 
 ## 安全限制
 

@@ -145,9 +145,16 @@ export const backend = {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(settings),
   }),
-  action: (action: string, instanceId: string) => request<BackendState>(`/v1/actions/${action}`, {
+  armStart: (instanceId: string) => request<{ startToken: string }>('/v1/actions/arm-start', {
     method: 'POST',
     headers: { 'X-Island-Finder-Instance': instanceId },
+  }),
+  action: (action: string, instanceId: string, startToken?: string) => request<BackendState>(`/v1/actions/${action}`, {
+    method: 'POST',
+    headers: {
+      'X-Island-Finder-Instance': instanceId,
+      ...(startToken ? { 'X-Island-Finder-Start-Token': startToken } : {}),
+    },
   }),
   clearLogs: () => request<{ ok: true }>('/v1/logs/clear', { method: 'POST' }),
   streamUrl: `${BACKEND_URL}/v1/stream.mjpg`,

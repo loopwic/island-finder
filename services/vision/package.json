@@ -1,0 +1,12 @@
+{
+  "name": "@island-finder/vision",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "start": "uv run --project ../.. --frozen python ../../vision_service/server.py",
+    "start:headless": "uv run --project ../.. --frozen python ../../vision_service/server.py --autostart",
+    "test": "uv run --project ../.. --frozen pytest ../../vision_service/tests",
+    "analyze": "uv run --project ../.. --frozen python ../../vision_service/server.py --analyze",
+    "reanalyze-audits": "uv run --project ../.. --frozen python ../../scripts/reanalyze-audits.py"
+  }
+}

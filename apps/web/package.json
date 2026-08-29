@@ -1,0 +1,31 @@
+{
+  "name": "@island-finder/web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite ../.. --config ../../vite.config.ts --host 127.0.0.1",
+    "build": "vite build ../.. --config ../../vite.config.ts",
+    "typecheck": "tsc --noEmit -p ../../tsconfig.app.json",
+    "test": "vitest run --root ../..",
+    "preview": "vite preview ../.. --config ../../vite.config.ts --host 127.0.0.1 --port 4173"
+  },
+  "dependencies": {
+    "@heroui/react": "3.2.4",
+    "@heroui/styles": "3.2.4",
+    "@tanstack/react-router": "1.170.32",
+    "lucide-react": "1.33.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "@vitejs/plugin-react": "6.1.0",
+    "tailwindcss": "4.3.3",
+    "typescript": "7.0.2",
+    "vite": "8.2.2",
+    "vitest": "4.1.11"
+  }
+}

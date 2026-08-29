@@ -42,7 +42,15 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         return self.server.bridge  # type: ignore[attr-defined]
 
     def log_message(self, format: str, *args: object) -> None:
-        print(f"[controller] {self.address_string()} {format % args}")
+        try:
+            print(
+                f"[controller] {self.address_string()} {format % args}",
+                flush=True,
+            )
+        except (BrokenPipeError, OSError):
+            # A closed inherited terminal must not abort HTTP responses while
+            # an orphaned controller is being recovered by the stack owner.
+            pass
 
     def _respond(self, status: int, payload: Any) -> None:
         body = _json_bytes(payload)
@@ -80,7 +88,15 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         if urlparse(self.path).path != "/v1/status":
             self._respond(HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
             return
-        self._respond(HTTPStatus.OK, self.bridge.status())
+        try:
+            self._respond(HTTPStatus.OK, self.bridge.status())
+        except ControllerError as error:
+            self._respond(error.status, {"error": str(error)})
+        except Exception as error:  # noqa: BLE001
+            self._respond(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"error": f"控制器状态读取失败：{error}"},
+            )
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path

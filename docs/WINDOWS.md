@@ -1,6 +1,6 @@
 # Windows 安装与排障
 
-Island Finder 的 Windows 运行时不依赖 Swift、zsh、AVFoundation 或 `mise`。前端和进程管理使用 Node.js，视觉与控制器服务使用 Python；摄像头走 DirectShow，开发板走 Windows COM 串口。
+Island Finder 的 Windows 运行时不依赖 Swift、zsh、AVFoundation 或 `mise`。Tauri 负责桌面窗口和统一进程生命周期，视觉与控制器服务使用 Python；摄像头走 DirectShow，开发板走 Windows COM 串口。
 
 ## 1. 安装运行时
 
@@ -8,13 +8,17 @@ Island Finder 的 Windows 运行时不依赖 Swift、zsh、AVFoundation 或 `mis
 
 - Node.js 22.12 或更新版本；
 - Python 3.11 或 3.12；
-- `uv`。
+- `uv`；
+- Rust stable-msvc；
+- Microsoft C++ Build Tools 中的“使用 C++ 的桌面开发”工作负载；
+- Microsoft Edge WebView2 Runtime（Windows 10 1803 及以后通常已经安装）。
 
 ```powershell
 node --version
 npm --version
 python --version
 uv --version
+rustc --version
 ```
 
 然后在项目目录安装锁定依赖并执行无硬件协议自检：
@@ -50,7 +54,7 @@ npm run dev
 
 ## 3. 选择采集卡并进行演练
 
-打开 `http://127.0.0.1:4173/`，进入“设备与识别”：
+运行 `npm run dev` 后会自动打开 Island Finder 桌面窗口，进入“设备与识别”：
 
 1. 从真实设备名称中选择外接 UVC/HDMI 采集卡；Windows 设备使用 DirectShow 硬件身份保存，而不是依赖不稳定的列表顺序。
 2. 确认状态显示 `DirectShow 采集`、1920×1080 和实时帧率。
@@ -81,4 +85,4 @@ npm run dev
 
 ### 端口已被占用
 
-统一启动器不会抢占 `4173`、`32145` 或 `48197`。先在原终端按 `Ctrl-C` 停止旧实例，再启动新实例。正常退出会先请求控制器停止配对并释放按键，然后关闭由启动器创建的进程。
+先运行 `npm run stop` 请求当前 supervisor 安全退出，再启动新实例。正常退出会先请求控制器停止配对并释放按键，然后关闭它创建的视觉与控制器进程。若端口仍被占用，说明占用者不是当前项目能验证的服务；Tauri 与 supervisor 都不会按端口盲目结束未知程序。

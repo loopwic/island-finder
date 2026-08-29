@@ -1,0 +1,16 @@
+{
+  "name": "@island-finder/desktop",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "tauri dev",
+    "start": "tauri dev --no-watch",
+    "bundle": "tauri build --ci --no-bundle -- --locked",
+    "check": "cargo check --locked --manifest-path src-tauri/Cargo.toml",
+    "fmt:check": "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check",
+    "lint": "cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.4"
+  }
+}

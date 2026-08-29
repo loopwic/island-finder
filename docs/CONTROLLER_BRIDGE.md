@@ -18,7 +18,7 @@ Nintendo Switch 2
 
 1. 开发板 UART/COM 接电脑，USB/OTG 接 Switch 2 或底座。
 2. 先保持前端演练模式开启。
-3. 用统一栈启动 `npm run dev`，或单独启动 `npm run controller:start`。
+3. 用 Tauri 桌面栈启动 `npm run dev`，或仅在维护控制器时单独运行 `npm run controller:start`。
 4. 等待状态显示 PABotBase2、NS2 有线手柄和主机输入均已就绪。
 5. 首次连接时单独验证 `A`、方向、`HOME` 和 `X`，并确认每次输入都会释放。
 

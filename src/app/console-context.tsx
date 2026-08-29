@@ -204,7 +204,10 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
           setSettingsSyncState('saved');
         }
       }
-      setState(await backend.action(name, state.instanceId));
+      const startToken = name === 'start'
+        ? (await backend.armStart(state.instanceId)).startToken
+        : undefined;
+      setState(await backend.action(name, state.instanceId, startToken));
     } catch (error) {
       setNotice(error instanceof Error ? error.message : String(error));
     }

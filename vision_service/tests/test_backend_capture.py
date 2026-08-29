@@ -758,6 +758,8 @@ def _runtime_action_harness():
     calls: list[str] = []
     runtime = BackendRuntime.__new__(BackendRuntime)
     runtime.instance_id = "current-instance"
+    runtime._lock = threading.RLock()
+    runtime._start_authorization = None
     runtime.engine = SimpleNamespace(
         start=lambda: calls.append("start"),
         pause=lambda: calls.append("pause"),
@@ -779,11 +781,27 @@ def test_stale_frontend_session_cannot_start_new_backend_instance():
     runtime, calls = _runtime_action_harness()
 
     with pytest.raises(ValueError, match="旧的后端会话"):
-        runtime.action("start", "stale-instance")
+        runtime.arm_start("stale-instance")
 
     assert calls == []
-    assert runtime.action("start", "current-instance") == {"ok": True}
+    token = runtime.arm_start("current-instance")["startToken"]
+    assert runtime.action("start", "current-instance", token) == {"ok": True}
     assert calls == ["start"]
+
+
+def test_start_requires_fresh_single_use_page_confirmation():
+    runtime, calls = _runtime_action_harness()
+
+    with pytest.raises(ValueError, match="未经当前页面确认"):
+        runtime.action("start", "current-instance")
+
+    token = runtime.arm_start("current-instance")["startToken"]
+    with pytest.raises(ValueError, match="未经当前页面确认"):
+        runtime.action("start", "current-instance", "wrong-token")
+    with pytest.raises(ValueError, match="未经当前页面确认"):
+        runtime.action("start", "current-instance", token)
+
+    assert calls == []
 
 
 def test_emergency_stop_does_not_require_instance_token():

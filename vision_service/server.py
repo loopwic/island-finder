@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import signal
+import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -21,9 +23,14 @@ from screen_classifier import classify_screen
 
 SERVICE_VERSION = "3.2"
 DEFAULT_SERVICE_PORT = 48_197
-LOCAL_ORIGINS = {"http://127.0.0.1:4173", "http://localhost:4173"}
+LOCAL_ORIGINS = {
+    "http://127.0.0.1:4173",
+    "http://localhost:4173",
+    "http://tauri.localhost",
+    "tauri://localhost",
+}
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DIST_ROOT = PROJECT_ROOT / "dist"
+DIST_ROOT = PROJECT_ROOT / "apps" / "web" / "dist"
 
 
 def _json_bytes(payload: Any) -> bytes:
@@ -41,7 +48,10 @@ class VisionHandler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Island-Finder-Instance")
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            "Content-Type, X-Island-Finder-Instance, X-Island-Finder-Start-Token",
+        )
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
 
@@ -150,10 +160,15 @@ class VisionHandler(BaseHTTPRequestHandler):
         if parsed.path.startswith("/v1/actions/"):
             try:
                 action = parsed.path.removeprefix("/v1/actions/")
-                payload = self.server.backend.action(  # type: ignore[attr-defined]
-                    action,
-                    self.headers.get("X-Island-Finder-Instance"),
-                )
+                instance_id = self.headers.get("X-Island-Finder-Instance")
+                if action == "arm-start":
+                    payload = self.server.backend.arm_start(instance_id)  # type: ignore[attr-defined]
+                else:
+                    payload = self.server.backend.action(  # type: ignore[attr-defined]
+                        action,
+                        instance_id,
+                        self.headers.get("X-Island-Finder-Start-Token"),
+                    )
                 self._headers(HTTPStatus.OK)
                 self.wfile.write(_json_bytes(payload))
             except Exception as error:  # noqa: BLE001
@@ -394,11 +409,19 @@ def main() -> int:
     )
     server = ThreadingHTTPServer((args.host, args.port), VisionHandler)
     server.backend = runtime  # type: ignore[attr-defined]
+    stopped = threading.Event()
+
+    def shutdown(_signum: int, _frame: object) -> None:
+        if stopped.is_set():
+            return
+        stopped.set()
+        threading.Thread(target=server.shutdown, daemon=True).start()
+
+    signal.signal(signal.SIGINT, shutdown)
+    signal.signal(signal.SIGTERM, shutdown)
     print(f"Island headless backend listening on http://{args.host}:{args.port}")
     try:
         server.serve_forever()
-    except KeyboardInterrupt:
-        pass
     finally:
         server.server_close()
         runtime.shutdown()

@@ -23,9 +23,12 @@ function run(command, args, label) {
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
-run(process.execPath, ['--check', 'scripts/run-stack.mjs'], '检查跨平台启动器');
 run(uvCommand, ['lock', '--check'], '检查 Python 锁文件');
-run(npmCommand, ['run', 'test'], '前端测试');
-run(npmCommand, ['run', 'vision:test'], 'Python/OpenCV 与控制器测试');
-run(npmCommand, ['run', 'build'], 'TypeScript 与生产构建');
-run(npmCommand, ['run', 'controller:self-test'], 'PABotBase2 协议自检');
+run(npmCommand, ['run', 'desktop:fmt'], '检查 Tauri Rust 格式');
+run(npmCommand, ['run', 'desktop:check'], '检查 Tauri 桌面进程管理器');
+run(npmCommand, ['run', 'desktop:lint'], '检查 Tauri Rust Clippy');
+run(
+  npmCommand,
+  ['exec', '--', 'turbo', 'run', 'test', 'build', 'self-test', '--force'],
+  'Turbo 工作区测试、类型检查、生产构建与控制器自检',
+);

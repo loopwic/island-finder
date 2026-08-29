@@ -14,47 +14,41 @@
   "homepage": "https://github.com/loopwic/island-finder#readme",
   "type": "module",
   "packageManager": "npm@11.17.0",
+  "workspaces": [
+    "apps/*",
+    "services/*"
+  ],
   "engines": {
     "node": ">=22.12.0",
     "npm": ">=10"
   },
   "scripts": {
     "setup": "npm ci && npm run vision:sync",
-    "dev": "node scripts/run-stack.mjs dev",
-    "dev:web": "vite --host 127.0.0.1",
-    "start": "node scripts/run-stack.mjs production",
-    "start:headless": "node scripts/run-stack.mjs headless",
-    "typecheck": "tsc --noEmit -p tsconfig.app.json",
-    "build": "npm run typecheck && vite build",
-    "preview:web": "vite preview --host 127.0.0.1 --port 4173",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "dev": "npm run dev --workspace @island-finder/desktop",
+    "stop": "node scripts/stop-runtime.mjs",
+    "dev:web": "turbo run dev --filter @island-finder/web",
+    "runtime:start": "uv run --frozen python vision_service/runtime_supervisor.py",
+    "start": "npm run start --workspace @island-finder/desktop",
+    "start:headless": "uv run --frozen python vision_service/runtime_supervisor.py --autostart",
+    "desktop:build": "npm run bundle --workspace @island-finder/desktop",
+    "desktop:check": "npm run check --workspace @island-finder/desktop",
+    "desktop:fmt": "npm run fmt:check --workspace @island-finder/desktop",
+    "desktop:lint": "npm run lint --workspace @island-finder/desktop",
+    "typecheck": "turbo run typecheck --filter @island-finder/web",
+    "build": "turbo run build --filter @island-finder/web",
+    "preview:web": "npm run preview --workspace @island-finder/web",
+    "test": "turbo run test",
     "check": "node scripts/check.mjs",
-    "controller:start": "uv run --frozen python vision_service/controller_server.py",
-    "controller:diagnose": "uv run --frozen python vision_service/controller_server.py --diagnose",
-    "controller:self-test": "uv run --frozen python vision_service/controller_server.py --self-test",
+    "controller:start": "npm run start --workspace @island-finder/controller",
+    "controller:diagnose": "npm run diagnose --workspace @island-finder/controller",
+    "controller:self-test": "npm run self-test --workspace @island-finder/controller",
     "vision:sync": "uv sync",
-    "vision:start": "uv run --frozen python vision_service/server.py",
-    "vision:test": "uv run --frozen pytest",
-    "vision:analyze": "uv run --frozen python vision_service/server.py --analyze",
-    "vision:reanalyze-audits": "uv run --frozen python scripts/reanalyze-audits.py"
-  },
-  "dependencies": {
-    "@heroui/react": "3.2.4",
-    "@heroui/styles": "3.2.4",
-    "@tanstack/react-router": "1.170.32",
-    "lucide-react": "1.33.0",
-    "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "vision:start": "npm run start --workspace @island-finder/vision",
+    "vision:test": "npm run test --workspace @island-finder/vision",
+    "vision:analyze": "npm run analyze --workspace @island-finder/vision",
+    "vision:reanalyze-audits": "npm run reanalyze-audits --workspace @island-finder/vision"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "4.3.3",
-    "@types/react": "19.2.18",
-    "@types/react-dom": "19.2.4",
-    "@vitejs/plugin-react": "6.1.0",
-    "tailwindcss": "4.3.3",
-    "typescript": "7.0.2",
-    "vite": "8.2.2",
-    "vitest": "4.1.11"
+    "turbo": "2.10.12"
   }
 }

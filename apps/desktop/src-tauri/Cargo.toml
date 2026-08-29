@@ -1,0 +1,13 @@
+[package]
+name = "island-finder-desktop"
+version = "0.1.0"
+description = "Island Finder desktop runtime owner"
+authors = ["Island Finder contributors"]
+edition = "2024"
+license = "MIT"
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3", features = [] }
+
+[dependencies]
+tauri = { version = "=2.11.5", features = [] }

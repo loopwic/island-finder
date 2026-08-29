@@ -11,7 +11,6 @@ import subprocess
 import sys
 import threading
 import time
-import unicodedata
 import uuid
 import urllib.error
 import urllib.request
@@ -26,7 +25,27 @@ from analyzer import analysis_input_sha256, analyze_map
 from audit_store import SelectionAuditStore
 from birthday_ocr import recognize_birthday
 from candidate_ocr import recognize_keyboard_frame
+from input_planner import (
+    RESTART_COMMANDS,
+    commands_for_birthday,
+    commands_for_candidate_move,
+    commands_for_english_character,
+    commands_for_pinyin,
+    commands_to_candidate_row,
+    name_input_mode,
+    normalize_pinyin,
+    press,
+    validate_name,
+)
 from screen_classifier import classify_screen
+from settings import (
+    CALIBRATED_CARD_REGIONS,
+    DEFAULT_SETTINGS,
+    LEGACY_CARD_REGIONS,
+    SettingsStore,
+    _default_data_dir,
+    validate_settings,
+)
 
 
 CONTROLLER_URL = "http://127.0.0.1:32145"
@@ -45,50 +64,6 @@ ADVANCE_STALL_PRESS_LIMIT = 12
 ADVANCE_STALL_MAX_DELTA = 0.01
 
 
-LEGACY_CARD_REGIONS: list[dict[str, float]] = [
-    {"x": 0.105, "y": 0.2, "width": 0.355, "height": 0.29},
-    {"x": 0.54, "y": 0.2, "width": 0.355, "height": 0.29},
-    {"x": 0.105, "y": 0.535, "width": 0.355, "height": 0.29},
-    {"x": 0.54, "y": 0.535, "width": 0.355, "height": 0.29},
-]
-
-# Measured from the actual 1920x1080 Chinese four-island selection screen.
-# Each region keeps 4-7 pixels of water/card padding around the detected map so
-# anti-aliasing and tiny HDMI shifts cannot clip beaches, rocks, or docks.
-CALIBRATED_CARD_REGIONS: list[dict[str, float]] = [
-    {"x": 0.249, "y": 0.291, "width": 0.232, "height": 0.253},
-    {"x": 0.52, "y": 0.296, "width": 0.232, "height": 0.251},
-    {"x": 0.2495, "y": 0.5715, "width": 0.23, "height": 0.247},
-    {"x": 0.5205, "y": 0.5685, "width": 0.2305, "height": 0.2525},
-]
-
-
-DEFAULT_SETTINGS: dict[str, Any] = {
-    "identity": {
-        "name": "",
-        "namePinyin": [],
-        "birthMonth": 1,
-        "birthDay": 1,
-        "initialStyle": "right",
-    },
-    "birthdayCursorOrigin": {"month": 1, "day": 1},
-    "threshold": 0.76,
-    "stableFrames": 3,
-    "scanIntervalMs": 320,
-    "autoReject": True,
-    "dryRun": True,
-    "captureDeviceIndex": 0,
-    "captureDeviceId": "",
-    "captureDeviceName": "",
-    "captureWidth": 1920,
-    "captureHeight": 1080,
-    "captureFps": 30,
-    "autoConnectController": True,
-    "cardRegions": copy.deepcopy(CALIBRATED_CARD_REGIONS),
-    "targets": [],
-}
-
-
 INITIAL_RUNTIME: dict[str, Any] = {
     "phase": "idle",
     "runNumber": 0,
@@ -102,160 +77,8 @@ INITIAL_RUNTIME: dict[str, Any] = {
 }
 
 
-PINYIN_ROWS = (
-    "1234567890-",
-    "qwertyuiop/",
-    "asdfghjkl:\\",
-    "zxcvbnm,.?!",
-)
-
-
 def now_ms() -> int:
     return round(time.time() * 1000)
-
-
-def _deep_merge(defaults: dict[str, Any], value: dict[str, Any]) -> dict[str, Any]:
-    result = copy.deepcopy(defaults)
-    for key, item in value.items():
-        if key in result and isinstance(result[key], dict) and isinstance(item, dict):
-            result[key] = _deep_merge(result[key], item)
-        else:
-            result[key] = copy.deepcopy(item)
-    return result
-
-
-def _card_regions_equal(
-    left: object,
-    right: list[dict[str, float]],
-    tolerance: float = 1e-6,
-) -> bool:
-    if not isinstance(left, list) or len(left) != len(right):
-        return False
-    try:
-        return all(
-            all(abs(float(region[key]) - expected[key]) <= tolerance for key in ("x", "y", "width", "height"))
-            for region, expected in zip(left, right, strict=True)
-            if isinstance(region, dict)
-        ) and all(isinstance(region, dict) for region in left)
-    except (KeyError, TypeError, ValueError):
-        return False
-
-
-def _default_data_dir() -> Path:
-    override = os.environ.get("ISLAND_FINDER_DATA_DIR")
-    if override:
-        return Path(override).expanduser().resolve()
-    return Path(__file__).resolve().parents[1] / "data"
-
-
-class SettingsStore:
-    def __init__(self, data_dir: Path | None = None) -> None:
-        self.data_dir = data_dir or _default_data_dir()
-        self.path = self.data_dir / "settings.json"
-        self._lock = threading.RLock()
-        self._settings = self._load()
-
-    def _load(self) -> dict[str, Any]:
-        try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-            if not isinstance(payload, dict):
-                raise ValueError("settings root must be an object")
-            settings = validate_settings(_deep_merge(DEFAULT_SETTINGS, payload))
-            legacy_keys = set(payload) - set(DEFAULT_SETTINGS)
-            if legacy_keys or not _card_regions_equal(payload.get("cardRegions"), CALIBRATED_CARD_REGIONS):
-                temporary = self.path.with_suffix(".tmp")
-                temporary.write_text(
-                    json.dumps(settings, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-                temporary.replace(self.path)
-                print("[backend] 已迁移配置并固定四岛裁切框为 1080p 实测坐标")
-            return settings
-        except FileNotFoundError:
-            return copy.deepcopy(DEFAULT_SETTINGS)
-        except Exception as error:  # noqa: BLE001
-            print(f"[backend] 无法读取后端配置，使用默认值：{error}")
-            return copy.deepcopy(DEFAULT_SETTINGS)
-
-    def get(self) -> dict[str, Any]:
-        with self._lock:
-            return copy.deepcopy(self._settings)
-
-    def update(self, payload: dict[str, Any]) -> dict[str, Any]:
-        if not isinstance(payload, dict):
-            raise ValueError("配置必须是 JSON 对象")
-        with self._lock:
-            settings = validate_settings(_deep_merge(self._settings, payload))
-            self.data_dir.mkdir(parents=True, exist_ok=True)
-            temporary = self.path.with_suffix(".tmp")
-            temporary.write_text(
-                json.dumps(settings, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-            temporary.replace(self.path)
-            self._settings = settings
-            return copy.deepcopy(settings)
-
-
-def validate_settings(settings: dict[str, Any]) -> dict[str, Any]:
-    identity = settings.get("identity")
-    if not isinstance(identity, dict):
-        raise ValueError("身份配置无效")
-    normalized_name = str(identity.get("name", "")).strip()[:10]
-    identity["name"] = (
-        normalized_name.lower()
-        if re.fullmatch(r"[A-Za-z]+", normalized_name)
-        else normalized_name
-    )
-    pinyin = identity.get("namePinyin", [])
-    if not isinstance(pinyin, list):
-        raise ValueError("姓名拼音必须是数组")
-    identity["namePinyin"] = [str(item) for item in pinyin[:10]]
-    identity["birthMonth"] = max(1, min(12, int(identity.get("birthMonth", 1))))
-    identity["birthDay"] = max(1, min(31, int(identity.get("birthDay", 1))))
-    if identity.get("initialStyle") not in {"left", "right"}:
-        raise ValueError("初始造型必须是 left 或 right")
-
-    birthday_origin = settings.get("birthdayCursorOrigin")
-    if not isinstance(birthday_origin, dict):
-        raise ValueError("生日初始游标配置无效")
-    birthday_origin["month"] = max(1, min(12, int(birthday_origin.get("month", 1))))
-    birthday_origin["day"] = max(1, min(31, int(birthday_origin.get("day", 1))))
-
-    settings["threshold"] = max(0.55, min(0.95, float(settings.get("threshold", 0.76))))
-    settings["stableFrames"] = max(1, min(8, int(settings.get("stableFrames", 3))))
-    settings["scanIntervalMs"] = max(250, min(5000, int(settings.get("scanIntervalMs", 320))))
-    # Windows camera enumerators encode the selected backend in the high
-    # digits (for example DirectShow camera 1 may be index 701).
-    settings["captureDeviceIndex"] = max(
-        0,
-        min(2_048, int(settings.get("captureDeviceIndex", 0))),
-    )
-    # DirectShow symbolic links commonly include a long USB instance path and
-    # GUID. Preserve enough of it for a stable binding after re-enumeration.
-    settings["captureDeviceId"] = str(settings.get("captureDeviceId") or "")[:1_024]
-    settings["captureDeviceName"] = str(settings.get("captureDeviceName") or "")[:200]
-    settings["captureWidth"] = max(640, min(3840, int(settings.get("captureWidth", 1920))))
-    settings["captureHeight"] = max(360, min(2160, int(settings.get("captureHeight", 1080))))
-    settings["captureFps"] = max(3, min(30, int(settings.get("captureFps", 30))))
-    for key in ("autoReject", "dryRun", "autoConnectController"):
-        settings[key] = bool(settings.get(key, DEFAULT_SETTINGS[key]))
-
-    # Map crops are backend-owned measured coordinates.  Browser settings are
-    # deliberately ignored so a stale tab or accidental drag cannot corrupt
-    # map analysis or audit evidence.
-    settings["cardRegions"] = copy.deepcopy(CALIBRATED_CARD_REGIONS)
-    regions = settings["cardRegions"]
-    for region in regions:
-        if not isinstance(region, dict):
-            raise ValueError("地图识别框无效")
-        x, y, width, height = (float(region[key]) for key in ("x", "y", "width", "height"))
-        if x < 0 or y < 0 or width <= 0 or height <= 0 or x + width > 1 or y + height > 1:
-            raise ValueError("地图识别框必须位于画面内")
-        region.update({"x": x, "y": y, "width": width, "height": height})
-    # Keep persisted/API settings on the current schema. This also drops
-    # browser-era anchor fields from older installations.
-    return {key: copy.deepcopy(settings[key]) for key in DEFAULT_SETTINGS}
 
 
 def _devices_from_system_profiler(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -473,161 +296,6 @@ def effective_capture_mode(
     # not infer the USB wire format from the decoded CoreVideo pixel format and
     # do not silently reduce the requested resolution.
     return width, height, fps, None
-
-
-def normalize_pinyin(value: str) -> str:
-    normalized = value.strip().lower()
-    for source in "üǖǘǚǜ":
-        normalized = normalized.replace(source, "v")
-    normalized = "".join(
-        character
-        for character in unicodedata.normalize("NFD", normalized)
-        if unicodedata.category(character) != "Mn"
-    )
-    return re.sub(r"[1-5]", "", normalized)
-
-
-def _is_han(character: str) -> bool:
-    name = unicodedata.name(character, "")
-    return "CJK UNIFIED IDEOGRAPH" in name or "CJK COMPATIBILITY IDEOGRAPH" in name
-
-
-def name_input_mode(identity: dict[str, Any]) -> str:
-    characters = list(str(identity.get("name", "")).strip())
-    if not characters:
-        return "empty"
-    if len(characters) > 10:
-        return "unsupported"
-    if all(_is_han(character) for character in characters):
-        return "chinese"
-    if re.fullmatch(r"[A-Za-z]+", "".join(characters)):
-        return "english"
-    return "unsupported"
-
-
-def validate_name(identity: dict[str, Any]) -> str:
-    characters = list(str(identity.get("name", "")).strip())
-    if not 1 <= len(characters) <= 10:
-        raise ValueError("名字需要 1–10 个字符")
-    mode = name_input_mode(identity)
-    if mode == "english":
-        return mode
-    if mode != "chinese":
-        raise ValueError("名字仅支持全中文或纯英文字母，不支持中英混输、数字和符号")
-    pinyin = identity.get("namePinyin", [])
-    for index, character in enumerate(characters):
-        value = normalize_pinyin(str(pinyin[index] if index < len(pinyin) else ""))
-        if not re.fullmatch(r"[a-zv]{1,6}", value):
-            raise ValueError(f"请填写“{character}”的拼音（不带声调）")
-    return mode
-
-
-def press(button: str, hold_ms: int = 80, after_ms: int = 160) -> dict[str, Any]:
-    return {"type": "press", "button": button, "holdMs": hold_ms, "afterMs": after_ms}
-
-
-RESTART_COMMANDS = [
-    press("HOME", 100, 1100),
-    press("X", 80, 350),
-    press("A", 80, 1500),
-    press("A", 80, 1600),
-    press("A", 220, 1500),
-]
-
-
-def _keyboard_nodes() -> list[tuple[str, float, int]]:
-    return [
-        (key, float(column), row)
-        for row, keys in enumerate(PINYIN_ROWS)
-        for column, key in enumerate(keys)
-    ]
-
-
-PINYIN_NODES = _keyboard_nodes()
-
-
-def _neighbors(node: tuple[str, float, int]) -> list[tuple[tuple[str, float, int], str]]:
-    key, x, y = node
-    horizontal = sorted((item for item in PINYIN_NODES if item[2] == y), key=lambda item: item[1])
-    index = next(position for position, item in enumerate(horizontal) if item[0] == key)
-    result: list[tuple[tuple[str, float, int], str]] = []
-    if index > 0:
-        result.append((horizontal[index - 1], "LEFT"))
-    if index < len(horizontal) - 1:
-        result.append((horizontal[index + 1], "RIGHT"))
-    for dy, button in ((-1, "UP"), (1, "DOWN")):
-        row = [item for item in PINYIN_NODES if item[2] == y + dy]
-        if row:
-            result.append((min(row, key=lambda item: abs(item[1] - x)), button))
-    return result
-
-
-def _path_between(source: str, target: str) -> list[str]:
-    if source == target:
-        return []
-    nodes = {item[0]: item for item in PINYIN_NODES}
-    if source not in nodes or target not in nodes:
-        raise ValueError(f"键盘上找不到字符：{source if source not in nodes else target}")
-    queue: deque[tuple[str, list[str]]] = deque([(source, [])])
-    visited = {source}
-    while queue:
-        key, path = queue.popleft()
-        for node, button in _neighbors(nodes[key]):
-            if node[0] in visited:
-                continue
-            next_path = [*path, button]
-            if node[0] == target:
-                return next_path
-            visited.add(node[0])
-            queue.append((node[0], next_path))
-    raise ValueError(f"键盘上找不到字符：{target}")
-
-
-def commands_for_pinyin(value: str, cursor: str = "1") -> tuple[list[dict[str, Any]], str]:
-    pinyin = normalize_pinyin(value)
-    if not re.fullmatch(r"[a-zv]{1,6}", pinyin):
-        raise ValueError("拼音需要使用 1–6 位英文字母")
-    commands: list[dict[str, Any]] = []
-    current = cursor
-    for character in pinyin:
-        commands.extend(press(button, 45, 72) for button in _path_between(current, character))
-        commands.append(press("A", 45, 105))
-        current = character
-    commands[-1] = press("A", 45, 420)
-    return commands, current
-
-
-def commands_for_english_character(character: str, cursor: str) -> tuple[list[dict[str, Any]], str]:
-    normalized = character.lower()
-    if not re.fullmatch(r"[a-z]", normalized):
-        raise ValueError("英文名字只能输入英文字母")
-    commands = [press(button, 45, 72) for button in _path_between(cursor, normalized)]
-    commands.append(press("A", 45, 260))
-    return commands, normalized
-
-
-def commands_to_candidate_row(last_key: str) -> list[dict[str, Any]]:
-    node = next((item for item in PINYIN_NODES if item[0] == last_key), None)
-    if node is None or node[2] == 0:
-        raise ValueError("无法从当前拼音按键进入候选栏")
-    return [press("UP", 45, 55) for _ in range(node[2] + 1)]
-
-
-def commands_for_candidate_move(source: int, target: int) -> list[dict[str, Any]]:
-    if source < 0 or target < 0:
-        raise ValueError("候选栏位置无效")
-    delta = target - source
-    button = "RIGHT" if delta >= 0 else "LEFT"
-    return [press(button, 45, 55) for _ in range(abs(delta))]
-
-
-def commands_for_birthday(month: int, day: int, origin_month: int, origin_day: int) -> list[dict[str, Any]]:
-    if not 1 <= month <= 12 or not 1 <= day <= 31:
-        raise ValueError("生日配置无效")
-    commands = [press("UP" if month >= origin_month else "DOWN") for _ in range(abs(month - origin_month))]
-    commands.append(press("RIGHT", 80, 120))
-    commands.extend(press("UP" if day >= origin_day else "DOWN") for _ in range(abs(day - origin_day)))
-    return commands
 
 
 class OperationCancelled(Exception):
@@ -2465,6 +2133,7 @@ class BackendRuntime:
                     }
                 )
         self._lock = threading.RLock()
+        self._start_authorization: tuple[str, float] | None = None
         self._logs: deque[dict[str, Any]] = deque(maxlen=200)
         self._next_log_id = 1
         self._snapshot = copy.deepcopy(INITIAL_RUNTIME)
@@ -2614,7 +2283,20 @@ class BackendRuntime:
         self.add_log("success", "配置已保存到后端；关闭网页后仍然生效")
         return settings
 
-    def action(self, name: str, instance_id: str | None = None) -> dict[str, Any]:
+    def arm_start(self, instance_id: str | None) -> dict[str, str]:
+        if instance_id != self.instance_id:
+            raise ValueError("启动请求来自旧的后端会话，请刷新页面后重试")
+        token = uuid.uuid4().hex
+        with self._lock:
+            self._start_authorization = (token, time.monotonic() + 5.0)
+        return {"startToken": token}
+
+    def action(
+        self,
+        name: str,
+        instance_id: str | None = None,
+        start_token: str | None = None,
+    ) -> dict[str, Any]:
         actions: dict[str, Callable[[], Any]] = {
             "start": self.engine.start,
             "pause": self.engine.pause,
@@ -2628,8 +2310,18 @@ class BackendRuntime:
         }
         if name not in actions:
             raise ValueError(f"未知后端动作：{name}")
-        if name == "start" and instance_id != self.instance_id:
-            raise ValueError("启动请求来自旧的后端会话，请刷新页面后重试")
+        if name == "start":
+            if instance_id != self.instance_id:
+                raise ValueError("启动请求来自旧的后端会话，请刷新页面后重试")
+            with self._lock:
+                authorization = self._start_authorization
+                self._start_authorization = None
+            if (
+                authorization is None
+                or start_token != authorization[0]
+                or time.monotonic() > authorization[1]
+            ):
+                raise ValueError("启动请求未经当前页面确认，请重新点击开始")
         actions[name]()
         return self.state()
 

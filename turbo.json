@@ -1,0 +1,41 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "ui": "stream",
+  "globalDependencies": [
+    "index.html",
+    "src/**",
+    "tsconfig*.json",
+    "vite.config.ts"
+  ],
+  "tasks": {
+    "dev": {
+      "cache": false,
+      "persistent": true,
+      "interruptible": true
+    },
+    "start": {
+      "cache": false,
+      "persistent": true
+    },
+    "start:headless": {
+      "cache": false,
+      "persistent": true
+    },
+    "typecheck": {
+      "outputs": []
+    },
+    "build": {
+      "dependsOn": ["typecheck"],
+      "outputs": ["dist/**"]
+    },
+    "test": {
+      "cache": false
+    },
+    "self-test": {
+      "cache": false
+    },
+    "check": {
+      "outputs": []
+    }
+  }
+}
