@@ -8,8 +8,9 @@ const desktopRoot = path.join(projectRoot, 'apps/desktop');
 const tauri = path.join(
   projectRoot,
   'node_modules',
-  '.bin',
-  process.platform === 'win32' ? 'tauri.cmd' : 'tauri',
+  '@tauri-apps',
+  'cli',
+  'tauri.js',
 );
 const bundles = process.platform === 'darwin'
   ? 'app'
@@ -18,8 +19,8 @@ const bundles = process.platform === 'darwin'
     : 'appimage';
 
 const result = spawnSync(
-  tauri,
-  ['build', '--ci', '--bundles', bundles, '--', '--locked'],
+  process.execPath,
+  [tauri, 'build', '--ci', '--bundles', bundles, '--', '--locked'],
   {
     cwd: desktopRoot,
     env: process.env,
