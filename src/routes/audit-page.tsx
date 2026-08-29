@@ -7,10 +7,12 @@ import {
   ExternalLink,
   FileImage,
   LoaderCircle,
+  RefreshCw,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import {
   backend,
+  type AuditSummary,
   type AuditStatus,
   type SelectionAudit,
 } from '../backend/client';
@@ -58,7 +60,7 @@ function RecordList({
   selectedId,
   onSelect,
 }: {
-  audits: SelectionAudit[];
+  audits: AuditSummary[];
   limit: number;
   selectedId: string | null;
   onSelect: (id: string) => void;
@@ -266,14 +268,22 @@ function AuditDetail({ record }: { record: SelectionAudit }) {
 }
 
 export function AuditPage() {
-  const [audits, setAudits] = useState<SelectionAudit[]>([]);
+  const [audits, setAudits] = useState<AuditSummary[]>([]);
   const [limit, setLimit] = useState(20);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [selectedRecord, setSelectedRecord] = useState<SelectionAudit | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyRevision, setHistoryRevision] = useState(0);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [detailRevision, setDetailRevision] = useState(0);
 
   useEffect(() => {
     let disposed = false;
+    let timer: number | undefined;
+    setHistoryLoading(true);
+
     const refresh = async () => {
       try {
         const response = await backend.auditHistory();
@@ -285,29 +295,67 @@ export function AuditPage() {
             ? current
             : response.audits[0]?.id ?? null
         ));
-        setError(null);
+        setHistoryError(null);
       } catch (reason) {
-        if (!disposed) setError(reason instanceof Error ? reason.message : '无法读取审计记录');
+        if (!disposed) {
+          setHistoryError(reason instanceof Error ? reason.message : '无法读取审计记录');
+        }
       } finally {
-        if (!disposed) setLoading(false);
+        if (!disposed) {
+          setHistoryLoading(false);
+          timer = window.setTimeout(() => void refresh(), 5000);
+        }
       }
     };
+
     void refresh();
-    const timer = window.setInterval(() => void refresh(), 3000);
     return () => {
       disposed = true;
-      window.clearInterval(timer);
+      if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, []);
+  }, [historyRevision]);
 
-  const selected = useMemo(
+  const selectedSummary = useMemo(
     () => audits.find((record) => record.id === selectedId) ?? null,
     [audits, selectedId],
   );
 
-  if (loading) {
+  useEffect(() => {
+    if (!selectedId) {
+      setSelectedRecord(null);
+      setDetailError(null);
+      setDetailLoading(false);
+      return;
+    }
+
+    let disposed = false;
+    setDetailLoading(true);
+    setDetailError(null);
+    setSelectedRecord((current) => current?.id === selectedId ? current : null);
+
+    void backend.audit(selectedId)
+      .then((record) => {
+        if (!disposed) setSelectedRecord(record);
+      })
+      .catch((reason) => {
+        if (!disposed) {
+          setDetailError(reason instanceof Error ? reason.message : '无法读取这轮审计详情');
+        }
+      })
+      .finally(() => {
+        if (!disposed) setDetailLoading(false);
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [detailRevision, selectedId, selectedSummary?.updatedAt]);
+
+  const selectedDetail = selectedRecord?.id === selectedId ? selectedRecord : null;
+
+  if (historyLoading && audits.length === 0) {
     return (
-      <div className="text-muted grid min-h-[28rem] place-items-center text-sm">
+      <div aria-live="polite" className="text-muted grid min-h-[28rem] place-items-center text-sm">
         <span className="flex items-center gap-2"><LoaderCircle className="animate-spin" size={18} />正在读取后端审计记录</span>
       </div>
     );
@@ -315,17 +363,35 @@ export function AuditPage() {
 
   return (
     <div className="space-y-4">
-      {error && (
+      {historyError && audits.length > 0 && (
         <Alert status="danger">
           <Alert.Indicator />
           <Alert.Content>
-            <Alert.Title>审计接口未响应</Alert.Title>
-            <Alert.Description>{error}</Alert.Description>
+            <Alert.Title>审计列表暂时无法刷新</Alert.Title>
+            <Alert.Description>{historyError}。现有记录仍可查看，系统会自动重试。</Alert.Description>
           </Alert.Content>
+          <Button size="sm" variant="secondary" onPress={() => setHistoryRevision((value) => value + 1)}>
+            <RefreshCw size={15} />立即重试
+          </Button>
         </Alert>
       )}
 
-      {audits.length === 0 ? (
+      {historyError && audits.length === 0 ? (
+        <Card>
+          <Card.Content className="p-8">
+            <div className="grid min-h-[20rem] w-full place-items-center text-center">
+              <div>
+                <CircleX className="text-danger mx-auto" size={30} />
+                <h2 className="mt-3 text-base font-semibold">审计记录读取失败</h2>
+                <p className="text-muted mt-1 max-w-md text-sm leading-6">{historyError}</p>
+                <Button className="mt-4" variant="secondary" onPress={() => setHistoryRevision((value) => value + 1)}>
+                  <RefreshCw size={16} />重新读取
+                </Button>
+              </div>
+            </div>
+          </Card.Content>
+        </Card>
+      ) : audits.length === 0 ? (
         <Card>
           <Card.Content className="p-8">
             <div className="grid min-h-[20rem] w-full place-items-center text-center">
@@ -342,7 +408,51 @@ export function AuditPage() {
       ) : (
         <div className="grid min-w-0 items-start gap-4 xl:grid-cols-[21rem_minmax(0,1fr)]">
           <RecordList audits={audits} limit={limit} selectedId={selectedId} onSelect={setSelectedId} />
-          {selected && <AuditDetail record={selected} />}
+          <div aria-live="polite" className="min-w-0">
+            {detailError && !selectedDetail ? (
+              <Card>
+                <Card.Content className="p-8">
+                  <div className="grid min-h-[20rem] place-items-center text-center">
+                    <div>
+                      <CircleX className="text-danger mx-auto" size={30} />
+                      <h2 className="mt-3 text-base font-semibold">这轮审计详情读取失败</h2>
+                      <p className="text-muted mt-1 max-w-md text-sm leading-6">{detailError}</p>
+                      <Button className="mt-4" variant="secondary" onPress={() => setDetailRevision((value) => value + 1)}>
+                        <RefreshCw size={16} />重试详情
+                      </Button>
+                    </div>
+                  </div>
+                </Card.Content>
+              </Card>
+            ) : detailLoading && !selectedDetail ? (
+              <Card>
+                <Card.Content className="p-8">
+                  <div className="text-muted grid min-h-[20rem] place-items-center text-sm">
+                    <span className="flex items-center gap-2">
+                      <LoaderCircle className="animate-spin" size={18} />
+                      正在读取{selectedSummary ? runLabel(selectedSummary.runNumber) : '审计'}详情
+                    </span>
+                  </div>
+                </Card.Content>
+              </Card>
+            ) : selectedDetail ? (
+              <div className="space-y-4">
+                {detailError && (
+                  <Alert status="danger">
+                    <Alert.Indicator />
+                    <Alert.Content>
+                      <Alert.Title>详情刷新失败</Alert.Title>
+                      <Alert.Description>{detailError}。当前仍显示上一次成功读取的证据。</Alert.Description>
+                    </Alert.Content>
+                    <Button size="sm" variant="secondary" onPress={() => setDetailRevision((value) => value + 1)}>
+                      <RefreshCw size={15} />重试
+                    </Button>
+                  </Alert>
+                )}
+                <AuditDetail record={selectedDetail} />
+              </div>
+            ) : null}
+          </div>
         </div>
       )}
     </div>

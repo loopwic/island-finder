@@ -1,7 +1,7 @@
 {
   "name": "@island-finder/controller",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "scripts": {
     "start": "uv run --project ../.. --frozen python ../../vision_service/controller_server.py",
     "start:headless": "uv run --project ../.. --frozen python ../../vision_service/controller_server.py",

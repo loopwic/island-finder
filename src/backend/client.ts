@@ -120,16 +120,45 @@ export type SelectionAudit = {
   }>;
 };
 
+export type AuditSummary = Pick<
+  SelectionAudit,
+  | 'id'
+  | 'createdAt'
+  | 'updatedAt'
+  | 'runNumber'
+  | 'status'
+  | 'summary'
+  | 'decision'
+  | 'bestCardIndex'
+  | 'bestScore'
+  | 'selectedCardIndex'
+>;
+
 export type AuditHistoryResponse = {
-  audits: SelectionAudit[];
+  audits: AuditSummary[];
   limit: number;
 };
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${BACKEND_URL}${path}`, { cache: 'no-store', ...init });
-  const payload = await response.json().catch(() => ({})) as T & { error?: string };
-  if (!response.ok) throw new Error(payload.error ?? `后端返回 ${response.status}`);
-  return payload;
+async function request<T>(path: string, init?: RequestInit, timeoutMs = 8_000): Promise<T> {
+  const controller = new AbortController();
+  const timeout = globalThis.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${BACKEND_URL}${path}`, {
+      cache: 'no-store',
+      ...init,
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => ({})) as T & { error?: string };
+    if (!response.ok) throw new Error(payload.error ?? `后端返回 ${response.status}`);
+    return payload;
+  } catch (reason) {
+    if (controller.signal.aborted) {
+      throw new Error(`后端请求超过 ${Math.round(timeoutMs / 1_000)} 秒，请重试`);
+    }
+    throw reason;
+  } finally {
+    globalThis.clearTimeout(timeout);
+  }
 }
 
 export const backend = {

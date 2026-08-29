@@ -163,6 +163,39 @@ def test_audit_store_prunes_every_file_beyond_latest_twenty(tmp_path, monkeypatc
         assert all(not (store.directory / card["file"]).exists() for card in removed["cards"])
 
 
+def test_audit_summaries_exclude_heavy_evidence(tmp_path):
+    store = SelectionAuditStore(tmp_path)
+    record = store.create(
+        _frame(),
+        REGIONS,
+        _candidates(),
+        run_number=3,
+        threshold=0.76,
+        stable_frames=3,
+        auto_reject=True,
+    )
+
+    summaries = store.list_summaries()
+
+    assert summaries == [
+        {
+            "id": record["id"],
+            "createdAt": record["createdAt"],
+            "updatedAt": record["updatedAt"],
+            "runNumber": 3,
+            "status": "reviewing",
+            "summary": "已捕获四岛地图，正在等待稳定判定",
+            "decision": None,
+            "bestCardIndex": 2,
+            "bestScore": pytest.approx(0.82),
+            "selectedCardIndex": None,
+        }
+    ]
+    assert "cards" not in summaries[0]
+    assert "candidates" not in summaries[0]
+    assert "previousAnalyses" not in summaries[0]
+
+
 def test_audit_image_endpoint_lookup_rejects_unregistered_names(tmp_path):
     store = SelectionAuditStore(tmp_path)
     record = store.create(

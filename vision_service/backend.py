@@ -2233,7 +2233,7 @@ class BackendRuntime:
         }
 
     def audit_history(self) -> dict[str, Any]:
-        return {"audits": self.audits.list(), "limit": self.audits.limit}
+        return {"audits": self.audits.list_summaries(), "limit": self.audits.limit}
 
     def audit(self, audit_id: str) -> dict[str, Any]:
         return self.audits.get(audit_id)

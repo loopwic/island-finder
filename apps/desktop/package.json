@@ -1,7 +1,7 @@
 {
   "name": "@island-finder/desktop",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "scripts": {
     "dev": "tauri dev",
     "start": "tauri dev --no-watch",

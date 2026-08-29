@@ -16,6 +16,18 @@ import numpy as np
 
 AUDIT_LIMIT = 20
 _AUDIT_ID = re.compile(r"^[0-9]{13}-[0-9a-f]{8}$")
+_SUMMARY_FIELDS = (
+    "id",
+    "createdAt",
+    "updatedAt",
+    "runNumber",
+    "status",
+    "summary",
+    "decision",
+    "bestCardIndex",
+    "bestScore",
+    "selectedCardIndex",
+)
 
 
 def _now_ms() -> int:
@@ -321,6 +333,16 @@ class SelectionAuditStore:
     def list(self) -> list[dict[str, Any]]:
         with self._lock:
             return copy.deepcopy(self._list_locked()[: self.limit])
+
+    def list_summaries(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [
+                {
+                    key: copy.deepcopy(payload.get(key))
+                    for key in _SUMMARY_FIELDS
+                }
+                for payload in self._list_locked()[: self.limit]
+            ]
 
     def get(self, audit_id: str) -> dict[str, Any]:
         with self._lock:
