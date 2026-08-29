@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -82,8 +83,14 @@ jobs:
         include:
           - os: macos-latest
             label: macOS
+            artifact: island-finder-macos
+            archive: island-finder-macos.tar.gz
+            binary: apps/desktop/src-tauri/target/release/island-finder-desktop
           - os: windows-latest
             label: Windows
+            artifact: island-finder-windows-x64
+            archive: island-finder-windows-x64.zip
+            binary: apps/desktop/src-tauri/target/release/island-finder-desktop.exe
 
     steps:
       - name: Check out source
@@ -110,3 +117,57 @@ jobs:
 
       - name: Build Tauri release executable
         run: npm run desktop:build
+
+      - name: Prepare runtime folder
+        run: node scripts/prepare-desktop-artifact.mjs --binary "${{ matrix.binary }}" --output release/package
+
+      - name: Package macOS runtime
+        if: runner.os == 'macOS'
+        run: tar -czf "release/${{ matrix.archive }}" -C release/package Island-Finder
+
+      - name: Package Windows runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path release/package/Island-Finder -DestinationPath "release/${{ matrix.archive }}"
+
+      - name: Upload desktop runtime
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: ${{ matrix.artifact }}
+          path: release/${{ matrix.archive }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  release:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: desktop-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download desktop runtimes
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: island-finder-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release-assets/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --generate-notes \
+              --title "Island Finder $GITHUB_REF_NAME"
+          fi

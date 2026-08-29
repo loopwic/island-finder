@@ -2,7 +2,7 @@ use std::{
     env,
     io::{self, Write},
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
         Arc, Mutex,
@@ -109,13 +109,38 @@ impl RuntimeProcess {
     }
 }
 
+fn find_project_root(start: &Path) -> Option<PathBuf> {
+    start.ancestors().find_map(|candidate| {
+        let supervisor = candidate.join("vision_service/runtime_supervisor.py");
+        let project = candidate.join("pyproject.toml");
+        if supervisor.is_file() && project.is_file() {
+            candidate.canonicalize().ok()
+        } else {
+            None
+        }
+    })
+}
+
 fn project_root() -> io::Result<PathBuf> {
     if let Some(value) = env::var_os("ISLAND_FINDER_PROJECT_ROOT") {
         return PathBuf::from(value).canonicalize();
     }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../..")
-        .canonicalize()
+    if let Some(root) = env::current_exe()
+        .ok()
+        .and_then(|executable| executable.parent().and_then(find_project_root))
+    {
+        return Ok(root);
+    }
+    if let Some(root) = env::current_dir()
+        .ok()
+        .and_then(|cwd| find_project_root(&cwd))
+    {
+        return Ok(root);
+    }
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        "可执行文件旁未找到 Island Finder 运行资源；请保留完整的 Island-Finder 文件夹",
+    ))
 }
 
 fn port_is_open(port: u16) -> bool {

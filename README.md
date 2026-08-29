@@ -1,188 +1,157 @@
 # Island Finder
 
-Island Finder 是一个只在本机运行的《集合啦！动物森友会》开局选岛系统。它从 UVC 采集卡读取 Switch 画面，由 Python/OpenCV 判断当前页面、输入预先配置的中文或英文姓名与生日、快速推进对话，并分析四张候选地图。候选岛满足全部硬条件且达到阈值后，系统只移动光标并进入 `awaitingDecision`，最终保留或放弃由用户决定。
+Island Finder 是一个在本机运行的《集合啦！动物森友会》开局选岛工具。它读取采集卡画面，自动完成开局对话、姓名与生日输入，并检查四张候选地图；找到符合条件的岛后会暂停，由你决定保留还是放弃。
 
 [![CI](https://github.com/loopwic/island-finder/actions/workflows/ci.yml/badge.svg)](https://github.com/loopwic/island-finder/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/loopwic/island-finder)](https://github.com/loopwic/island-finder/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-本项目与 Nintendo、任天堂、PABotBase2 及其关联公司无隶属、授权或背书关系。Nintendo Switch、《集合啦！动物森友会》及相关标识属于各自权利人。项目只处理用户自己设备输出的本地画面，不提供游戏文件、密钥、账户数据或官方固件。
+## 能做什么
 
-## 系统边界
+- 自动识别开机、账户选择、对话、姓名、生日、人物设置和四岛选择页面。
+- 中文姓名按“汉字 + 无声调拼音”输入，也支持英文姓名。
+- 对话过程中自动使用 `B` 加速，并跳过允许跳过的动画。
+- 等待四岛页面稳定后再裁切和评分，避免把转场画面当成地图。
+- 页面偶尔卡顿时最多重试三轮；无法确认页面时会停止或重开，不持续盲按。
+- 找到满足硬条件和分数阈值的岛后停在候选项上，不替你按 `A` 确认。
+- 每轮保存本机审计记录，方便回看地图和评分原因。
 
-```text
-Tauri 桌面应用 ─── React + TanStack Router + HeroUI 控制台
-       │                         │ HTTP / MJPEG（仅 127.0.0.1）
-       └── Python 运行监督器 ─── Python/OpenCV 常驻后端
-                      │          └── AVFoundation（macOS）/ DirectShow（Windows）
-                      └── Python 控制器服务 ─── ESP32-S3 / PABotBase2 ─── Switch 2
-```
+## 使用前准备
 
-- Python 后端是识别、状态机、地图裁切和评分的唯一来源；浏览器不再维护第二套地图规则。
-- 四个地图裁切区域固定在后端，基于 1920×1080 中文四岛页实测坐标。前端不显示、也不能修改裁切框。
-- UVC 设备按硬件名称与 ID 保存，数值索引只作兼容信息，避免设备重新枚举后选错采集源。
-- 正式流程只在已识别页面上发送输入。地图页必须通过渲染完整度和连续稳定帧门禁后才会评分。
-- 页面提交后若机器短暂停顿，最多执行三轮、仍由当前页面识别确认的重试；耗尽后停止，不盲按。
-- 命中候选后不会自动按 `A` 确认。停止、暂停、服务退出或控制链路异常都会取消队列并释放全部按键。
+你需要：
 
-## 环境要求
+- Nintendo Switch 或 Switch 2，以及《集合啦！动物森友会》。
+- 一张能输出 1920×1080 画面的 UVC HDMI 采集卡。
+- 一块运行 PABotBase2 固件的 ESP32-S3 双 USB 口开发板。
+- 两根连接线：开发板 UART/COM 口连接电脑，USB/OTG 口连接 Switch 或底座。
+- macOS 13 及以上，或 Windows 10/11 x64。
+- [`uv`](https://docs.astral.sh/uv/getting-started/installation/)。下载版会在第一次启动时用它准备本地 Python 环境。
 
-- macOS 13 或更新版本，或 Windows 10/11 x64
-- Node.js 22.12 或更新版本、npm 10 或更新版本
-- Python 3.11/3.12 与 [`uv`](https://docs.astral.sh/uv/getting-started/installation/)
-- Rust stable 工具链；macOS 还需 Xcode Command Line Tools，Windows 还需 Microsoft C++ Build Tools 与 WebView2
-- Switch / Switch 2、UVC HDMI 采集卡
-- 真实输入需要 ESP32-S3 双 USB 口开发板：UART/COM 接电脑，USB/OTG 接 Switch 2
-
-macOS 会使用项目内的 AVFoundation 原生采集优化，因此还需要 Swift。Windows 不需要 Swift，摄像头名称和硬件 ID 由 DirectShow 枚举，画面由 OpenCV 读取。Tauri 的平台依赖请按[官方先决条件](https://v2.tauri.app/start/prerequisites/)安装。
-
-依赖版本由 `package-lock.json` 与 `uv.lock` 固定。首次安装：
+macOS 还需要 Xcode Command Line Tools，用于编译项目自带的 AVFoundation 采集程序：
 
 ```bash
-npm run setup
+xcode-select --install
 ```
 
-Windows PowerShell 使用相同命令。如果自动串口选择不正确，可在启动前固定开发板 COM 口：
+Windows 通常已经安装 WebView2；如果程序窗口无法打开，请安装 [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。
+
+## 下载和启动
+
+从 [GitHub Releases](https://github.com/loopwic/island-finder/releases/latest) 下载与你的系统对应的文件：
+
+- macOS：`island-finder-macos.tar.gz`
+- Windows：`island-finder-windows-x64.zip`
+
+解压后请保留整个 `Island-Finder` 文件夹，不要只移动其中的可执行文件。
+
+### macOS
+
+进入解压后的文件夹并运行：
+
+```bash
+cd Island-Finder
+./Island-Finder
+```
+
+如果系统阻止第一次打开，可以在“系统设置 → 隐私与安全性”中允许打开。本项目目前未提供 Apple 公证签名。
+
+### Windows
+
+双击：
+
+```text
+Island-Finder.exe
+```
+
+第一次启动需要联网下载锁定版本的 Python 依赖，后续会直接复用本机缓存。
+
+## 连接设备
+
+```text
+Switch / Switch 2 ── HDMI ── UVC 采集卡 ── USB ── 电脑
+Switch / Switch 2 ── USB/OTG ── ESP32-S3 ── UART/COM ── 电脑
+```
+
+1. 打开 Switch，并确认采集卡能够输出 1920×1080 画面。
+2. 将开发板 UART/COM 口接到电脑。
+3. 将开发板 USB/OTG 口接到 Switch 或底座。
+4. 启动 Island Finder，进入“设备与识别”。
+5. 按设备名称选择采集卡，并确认手柄链路显示已连接。
+
+如果 Windows 连接了多个串口，可以在启动前指定开发板端口：
 
 ```powershell
 $env:ISLAND_CONTROLLER_SERIAL_PORT = "COM12"
-npm run dev
+./Island-Finder.exe
 ```
 
-## 启动方式
+## 第一次配置
 
-开发模式会打开 Tauri 桌面窗口，同时启动 Vite HMR、视觉后端与手柄服务：
+1. 填写岛民姓名、生日和初始人物样式。
+2. 中文姓名需要给每个汉字填写无声调拼音，例如“明”填写 `ming`。
+3. 设置希望保留的地图条件和综合分阈值。
+4. 首次运行保持“演练模式”，检查姓名候选、生日游标、采集画面和页面识别。
+5. 确认 Switch 能收到测试按键且按键会正常释放后，再关闭演练模式。
 
-```bash
-npm run dev
-```
+四张地图的裁切区域由后端固定管理，不需要手动拖动或校准前端方框。
 
-不监听 Rust 源码变更的桌面模式：
+## 开始选岛
 
-```bash
-npm start
-```
+1. 在运行控制台打开“自动选岛”。
+2. 程序会从当前页面开始识别和推进。
+3. 命中候选后，程序会暂停并显示四张地图的评分理由。
+4. 选择“保留”时由你继续在 Switch 上确认；选择“放弃并重来”时程序会重新开始下一轮。
 
-构建当前平台的桌面可执行文件：
+自动选岛只适用于尚未确认初始岛屿的新游戏流程，不会删除现有存档。
 
-```bash
-npm run desktop:build
-```
+## 停止
 
-不打开桌面窗口、并立即开始自动流程的无人值守模式：
+关闭桌面窗口会停止视觉和手柄服务，并释放所有按键。
 
-```bash
-npm run start:headless
-```
-
-从另一个终端安全停止当前桌面运行时及其全部后端：
+如果窗口已经消失但服务仍在运行，可以在源码目录执行：
 
 ```bash
 npm run stop
 ```
 
-Tauri 是交互运行的唯一进程所有者。它只启动一个 `runtime_supervisor.py` 子进程，后者再托管视觉后端和控制器；窗口关闭、Tauri 退出、后端异常或 `npm run stop` 都会先发送 `release-all` 和停止配对，再结束子进程。再次启动时只会回收能同时证明服务身份和当前项目绝对路径的旧 supervisor，绝不会按端口或 PID 盲目结束未知程序。前端开始按钮还使用 5 秒、单次消费的当前页面令牌，旧网页不能从轮询状态中取得启动权限。
+遇到无信号、未知页面、识别置信度不足或控制器断开时，程序不会继续盲按。
 
-Turborepo 只负责编排 Web HMR、构建、测试和缓存，不再直接托管会向 Switch 发送输入的 Python 服务。端口约定如下：
+## 本机数据
 
-| 服务 | 地址 |
-|---|---|
-| Vite HMR | `127.0.0.1:4173` |
-| Python/OpenCV 后端与生产页面 | `127.0.0.1:48197` |
-| Python/PABotBase2 手柄服务 | `127.0.0.1:32145` |
-| Supervisor 安全控制口 | `127.0.0.1:32146` |
+以下内容只保存在解压目录中的 `data/`：
 
-单独维护某一层时可使用：
+- 姓名、生日和设备设置：`data/settings.json`
+- 每轮地图画面和评分记录：`data/selection-audits/`
+
+项目不会上传采集画面、姓名、生日、账户数据或游戏数据。删除 `data/` 即可清除本机配置和历史记录。
+
+## 从源码运行
+
+开发者需要 Node.js 22.12+、npm 10+、Python 3.11/3.12、`uv` 和 Rust stable：
 
 ```bash
-npm run dev:web
-npm run runtime:start
-npm run vision:start
-npm run controller:start
-npm run controller:diagnose
-npm run controller:self-test
+git clone https://github.com/loopwic/island-finder.git
+cd island-finder
+npm run setup
+npm run dev
 ```
 
-## 使用流程
-
-1. 在“设备与识别”中选择按名称显示的 UVC 采集设备，并确认画面为 1920×1080。
-2. 配置纯中文或纯英文姓名、生日和初始人物样式；中文姓名还需为每个字填写无声调拼音。
-3. 首次运行保持演练模式，确认名字候选、生日游标、人物页面与四岛页面都能稳定识别。
-4. 设置综合分阈值和连续命中帧数。任何硬条件失败时，降低综合阈值也不会放行。
-5. 关闭演练模式前确认 PABotBase2 已连接、Switch 2 能收到输入且所有按键都会自动释放。
-6. 候选满足条件后，系统暂停并等待用户选择“保留”或“放弃并重来”。
-
-姓名、生日、采集设备和规则配置默认保存在项目目录内：
-
-```text
-./data/settings.json
-```
-
-每轮四岛页原图、固定裁切图和评分证据保存在 `./data/selection-audits/`，用于回归分析。`data/` 已加入 `.gitignore`，不会意外提交用户资料或截图。可用 `npm run vision:reanalyze-audits` 按当前算法重算历史审计；它不会向 Switch 发送输入。需要临时改位置时仍可设置 `ISLAND_FINDER_DATA_DIR`。
-
-Windows 首次部署见 [Windows 安装与排障](docs/WINDOWS.md)。详细画面约束见 [画面与识别校准](docs/CALIBRATION.md)，控制链路见 [控制器后端与安全协议](docs/CONTROLLER_BRIDGE.md)，模块职责见 [工程架构](docs/ARCHITECTURE.md)。
-
-## 质量门禁
-
-提交前执行统一检查：
+提交前运行：
 
 ```bash
 npm run check
 ```
 
-它会依次运行：
+更多资料：
 
-- Vitest 前端单元测试；
-- Pytest/OpenCV 后端测试；
-- TypeScript 类型检查与 Vite 生产构建；
-- PABotBase2 协议和跨平台控制器 HTTP 契约自检；
-- Rust/Tauri 桌面进程管理器编译检查；
-- Rustfmt 与 Clippy（警告视为失败）；
-- GitHub Actions 在 macOS、Windows 上分别执行全仓质量门禁和 Tauri release 构建。
+- [Windows 安装与排障](docs/WINDOWS.md)
+- [控制器连接与安全协议](docs/CONTROLLER_BRIDGE.md)
+- [画面与识别校准](docs/CALIBRATION.md)
+- [工程架构](docs/ARCHITECTURE.md)
+- [参与开发](CONTRIBUTING.md)
 
-常用的独立命令：
+## 声明
 
-```bash
-npm test
-npm run vision:test
-npm run typecheck
-npm run build
-npm run controller:self-test
-```
+本项目与 Nintendo、任天堂、PABotBase2 及其关联公司无隶属、授权或背书关系。Nintendo Switch、《集合啦！动物森友会》及相关标识属于各自权利人。本项目不提供游戏文件、密钥、账户数据或官方固件。
 
-构建和测试不会自动启动选岛流程，也不会发送真实手柄输入。
-
-## 目录
-
-```text
-apps/desktop/            Tauri 桌面壳、应用图标与安全生命周期管理
-apps/web/                Web workspace 清单与生产构建产物
-services/controller/     PABotBase2 控制器维护 workspace
-services/vision/         Python/OpenCV 视觉维护 workspace
-src/
-  app/                    前端后端状态同步与操作上下文
-  backend/                本地 HTTP API 客户端
-  components/             HeroUI/Tailwind 控制台
-  domain/                 前端配置与运行状态类型
-  routes/                 TanStack Router 三个工作页面
-  vision/                 目标参考图的浏览器端特征提取
-contracts/                前端与后端共同执行的行为契约样例
-vision_service/           OpenCV 识别、状态机、运行监督器、跨平台手柄服务、审计与测试
-scripts/                  检查、外部安全停止与 macOS 原生采集入口
-turbo.json                Web HMR、构建、测试与缓存规则
-docs/                     架构、画面与控制链路说明
-firmware/                 本地按键命令 JSON Schema
-```
-
-`node_modules/`、`.venv/`、`apps/web/dist/`、`apps/desktop/src-tauri/target/`、`.turbo/` 和 `.build/` 都是可重建产物，不属于源码并已加入 `.gitignore`。
-
-## 安全限制
-
-- 本项目不删除存档，只支持尚未确认初始岛屿的新游戏流程。
-- 名字与生日在游戏内确认后不可修改；真实运行前必须在演练模式核对。
-- 水果、机场颜色、花种等在四岛页不可见，不属于当前评分条件。
-- 当前页面、无信号、低置信度或地图转场未稳定时不会发送推进输入。
-- 用户候选决策是硬门禁；系统不会替用户确认保留岛屿。
-
-## 参与开发
-
-项目使用 MIT 许可证开放源代码。提交问题或改动前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)；安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。测试裁切图的权利说明见 [NOTICE.md](NOTICE.md)。
+项目使用 [MIT License](LICENSE)。测试图片的权利说明见 [NOTICE.md](NOTICE.md)。

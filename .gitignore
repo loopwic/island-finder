@@ -24,4 +24,5 @@ firmware/esp32s3-led-off-bootloader/sdkconfig
 *.p12
 *.pfx
 coverage/
+release/
 .DS_Store
