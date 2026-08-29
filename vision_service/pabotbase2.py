@@ -255,6 +255,18 @@ class PABotBase2Bridge:
                 release_id = self._send_controller_state(self.NEUTRAL_STATE, 40)
                 self._wait_for_command(release_id, 0.80)
                 self.diagnostic = "PABotBase2 已释放全部按键"
+            except ControllerError as error:
+                if str(error).startswith("按键命令 ") and str(error).endswith(
+                    "执行超时"
+                ):
+                    self.console_connected = False
+                    self.diagnostic = (
+                        "PABotBase2 已发送中性状态；NS2 尚未返回完成确认，"
+                        "串口保持连接"
+                    )
+                    return
+                self.diagnostic = f"释放 PABotBase2 按键失败：{error}"
+                self._stop_without_sending()
             except Exception as error:  # noqa: BLE001
                 self.diagnostic = f"释放 PABotBase2 按键失败：{error}"
                 self._stop_without_sending()

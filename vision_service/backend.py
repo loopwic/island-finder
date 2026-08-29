@@ -380,6 +380,33 @@ class ControllerClient:
         self._request("/v1/pairing/start", method="POST", timeout=8.0)
         return self.refresh()
 
+    def ensure_connected(self, attempts: int = 3) -> dict[str, Any]:
+        """Restore the local controller link before starting a safe sequence."""
+        last_error: Exception | None = None
+        for attempt in range(max(1, attempts)):
+            status = self.refresh()
+            if status["connected"]:
+                return status
+            try:
+                status = self.start_pairing()
+                if status["connected"]:
+                    if attempt:
+                        self._on_event(
+                            "status",
+                            f"手柄链路已在第 {attempt + 1}/{attempts} 次尝试后恢复",
+                        )
+                    return status
+            except Exception as error:  # noqa: BLE001
+                last_error = error
+            if attempt + 1 < attempts:
+                time.sleep(0.35 * (attempt + 1))
+        detail = (
+            str(last_error)
+            if last_error is not None
+            else str(self.status()["message"])
+        )
+        raise RuntimeError(f"本地手柄链路连续 {attempts} 次恢复失败：{detail}")
+
     def stop_pairing(self) -> dict[str, Any]:
         self.cancel()
         self._request("/v1/pairing/stop", method="POST", timeout=3.0)
@@ -404,27 +431,43 @@ class ControllerClient:
         self.run([press(button, hold_ms, after_ms)])
 
     def run(self, commands: list[dict[str, Any]]) -> None:
-        self.cancel()
         cancelled = threading.Event()
         with self._lock:
+            previous = self._operation
+            if previous is not None:
+                previous.set()
             self._operation = cancelled
+        if previous is not None:
+            try:
+                self._request("/v1/release-all", method="POST", timeout=1.5)
+            except Exception:  # noqa: BLE001
+                pass
         try:
+            if not self._dry_run and not self.connected:
+                try:
+                    self.ensure_connected(attempts=3)
+                except Exception as error:  # noqa: BLE001
+                    raise RestartRequired(str(error)) from error
             for command in commands:
                 if cancelled.is_set():
                     raise OperationCancelled()
                 if not self._dry_run:
-                    if not self.connected:
-                        raise RuntimeError("真实控制模式下必须先连接本地手柄服务")
-                    self._request(
-                        "/v1/press",
-                        method="POST",
-                        body={
-                            "type": "press",
-                            "button": command["button"],
-                            "hold_ms": int(command.get("holdMs", 70)),
-                        },
-                        timeout=4.0,
-                    )
+                    try:
+                        self._request(
+                            "/v1/press",
+                            method="POST",
+                            body={
+                                "type": "press",
+                                "button": command["button"],
+                                "hold_ms": int(command.get("holdMs", 70)),
+                            },
+                            timeout=4.0,
+                        )
+                    except Exception as error:  # noqa: BLE001
+                        self.refresh()
+                        raise RestartRequired(
+                            f"发送 {command['button']} 时手柄链路中断：{error}"
+                        ) from error
                 self._on_event(
                     "sent",
                     f"{'演练' if self._dry_run else '发送'} {command['button']}",
