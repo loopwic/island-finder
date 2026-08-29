@@ -25,7 +25,6 @@ Island Finder 是一个在本机运行的《集合啦！动物森友会》开局
 - 一块运行 PABotBase2 固件的 ESP32-S3 双 USB 口开发板。
 - 两根连接线：开发板 UART/COM 口连接电脑，USB/OTG 口连接 Switch 或底座。
 - macOS 13 及以上，或 Windows 10/11 x64。
-- [`uv`](https://docs.astral.sh/uv/getting-started/installation/)。下载版会在第一次启动时用它准备本地 Python 环境。
 
 macOS 还需要 Xcode Command Line Tools，用于编译项目自带的 AVFoundation 采集程序：
 
@@ -39,29 +38,20 @@ Windows 通常已经安装 WebView2；如果程序窗口无法打开，请安装
 
 从 [GitHub Releases](https://github.com/loopwic/island-finder/releases/latest) 下载与你的系统对应的文件：
 
-- macOS：`island-finder-macos.tar.gz`
-- Windows：`island-finder-windows-x64.zip`
+- macOS：`island-finder-macos.dmg`
+- Windows：`island-finder-windows-x64-setup.exe`
 
-解压后请保留整个 `Island-Finder` 文件夹，不要只移动其中的可执行文件。
+安装包已经包含视觉服务、依赖锁文件和本地运行器，不需要另外下载源码、Node.js、Rust 或 `uv`。
 
 ### macOS
 
-进入解压后的文件夹并运行：
-
-```bash
-cd Island-Finder
-./Island-Finder
-```
+打开 DMG，将 `Island Finder` 拖入 `Applications`，然后从“应用程序”或 Spotlight 启动。
 
 如果系统阻止第一次打开，可以在“系统设置 → 隐私与安全性”中允许打开。本项目目前未提供 Apple 公证签名。
 
 ### Windows
 
-双击：
-
-```text
-Island-Finder.exe
-```
+双击 `island-finder-windows-x64-setup.exe`，按安装向导完成安装，然后从开始菜单启动。
 
 第一次启动需要联网下载锁定版本的 Python 依赖，后续会直接复用本机缓存。
 
@@ -78,11 +68,10 @@ Switch / Switch 2 ── USB/OTG ── ESP32-S3 ── UART/COM ── 电脑
 4. 启动 Island Finder，进入“设备与识别”。
 5. 按设备名称选择采集卡，并确认手柄链路显示已连接。
 
-如果 Windows 连接了多个串口，可以在启动前指定开发板端口：
+如果 Windows 连接了多个串口，可以在 PowerShell 中保存开发板端口，然后从开始菜单启动：
 
 ```powershell
-$env:ISLAND_CONTROLLER_SERIAL_PORT = "COM12"
-./Island-Finder.exe
+[Environment]::SetEnvironmentVariable("ISLAND_CONTROLLER_SERIAL_PORT", "COM12", "User")
 ```
 
 ## 第一次配置
@@ -108,7 +97,7 @@ $env:ISLAND_CONTROLLER_SERIAL_PORT = "COM12"
 
 关闭桌面窗口会停止视觉和手柄服务，并释放所有按键。
 
-如果窗口已经消失但服务仍在运行，可以在源码目录执行：
+源码开发期间，如果窗口已经消失但服务仍在运行，可以在项目目录执行：
 
 ```bash
 npm run stop
@@ -118,12 +107,14 @@ npm run stop
 
 ## 本机数据
 
-以下内容只保存在解压目录中的 `data/`：
+以下内容只保存在系统为 Island Finder 分配的本机应用数据目录中：
 
-- 姓名、生日和设备设置：`data/settings.json`
-- 每轮地图画面和评分记录：`data/selection-audits/`
+- macOS：`~/Library/Application Support/dev.islandfinder.desktop/data/`
+- Windows：`%APPDATA%\dev.islandfinder.desktop\data\`
 
-项目不会上传采集画面、姓名、生日、账户数据或游戏数据。删除 `data/` 即可清除本机配置和历史记录。
+其中 `settings.json` 保存姓名、生日和设备设置，`selection-audits/` 保存每轮地图画面和评分记录。
+
+项目不会上传采集画面、姓名、生日、账户数据或游戏数据。关闭程序后删除上述 `data` 目录，即可清除本机配置和历史记录。
 
 ## 从源码运行
 

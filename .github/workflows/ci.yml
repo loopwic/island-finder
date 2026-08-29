@@ -84,13 +84,11 @@ jobs:
           - os: macos-latest
             label: macOS
             artifact: island-finder-macos
-            archive: island-finder-macos.tar.gz
-            binary: apps/desktop/src-tauri/target/release/island-finder-desktop
+            archive: island-finder-macos.dmg
           - os: windows-latest
             label: Windows
             artifact: island-finder-windows-x64
-            archive: island-finder-windows-x64.zip
-            binary: apps/desktop/src-tauri/target/release/island-finder-desktop.exe
+            archive: island-finder-windows-x64-setup.exe
 
     steps:
       - name: Check out source
@@ -112,25 +110,32 @@ jobs:
         with:
           workspaces: apps/desktop/src-tauri -> target
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.29"
+          enable-cache: false
+
       - name: Install frontend dependencies
         run: npm ci
 
       - name: Build Tauri release executable
         run: npm run desktop:build
 
-      - name: Prepare runtime folder
-        run: node scripts/prepare-desktop-artifact.mjs --binary "${{ matrix.binary }}" --output release/package
-
-      - name: Package macOS runtime
+      - name: Package macOS installer
         if: runner.os == 'macOS'
-        run: tar -czf "release/${{ matrix.archive }}" -C release/package Island-Finder
+        run: node scripts/package-macos-dmg.mjs --app "apps/desktop/src-tauri/target/release/bundle/macos/Island Finder.app" --output "release/${{ matrix.archive }}"
 
-      - name: Package Windows runtime
+      - name: Prepare Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
-        run: Compress-Archive -Path release/package/Island-Finder -DestinationPath "release/${{ matrix.archive }}"
+        run: |
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          $installer = Get-ChildItem "apps/desktop/src-tauri/target/release/bundle/nsis/*-setup.exe" | Select-Object -First 1
+          if (-not $installer) { throw "Tauri NSIS installer was not generated" }
+          Copy-Item $installer.FullName "release/${{ matrix.archive }}"
 
-      - name: Upload desktop runtime
+      - name: Upload desktop installer
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: ${{ matrix.artifact }}
@@ -149,7 +154,7 @@ jobs:
       contents: write
 
     steps:
-      - name: Download desktop runtimes
+      - name: Download desktop installers
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           pattern: island-finder-*

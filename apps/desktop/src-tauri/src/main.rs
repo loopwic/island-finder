@@ -1,5 +1,5 @@
 use std::{
-    env,
+    env, fs,
     io::{self, Write},
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream},
     path::{Path, PathBuf},
@@ -121,21 +121,30 @@ fn find_project_root(start: &Path) -> Option<PathBuf> {
     })
 }
 
-fn project_root() -> io::Result<PathBuf> {
+fn project_root(resource_dir: Option<&Path>) -> io::Result<(PathBuf, bool)> {
     if let Some(value) = env::var_os("ISLAND_FINDER_PROJECT_ROOT") {
-        return PathBuf::from(value).canonicalize();
+        return PathBuf::from(value)
+            .canonicalize()
+            .map(|root| (root, false));
+    }
+    if let Some(root) = resource_dir
+        .map(|resources| resources.join("runtime"))
+        .as_deref()
+        .and_then(find_project_root)
+    {
+        return Ok((root, true));
     }
     if let Some(root) = env::current_exe()
         .ok()
         .and_then(|executable| executable.parent().and_then(find_project_root))
     {
-        return Ok(root);
+        return Ok((root, false));
     }
     if let Some(root) = env::current_dir()
         .ok()
         .and_then(|cwd| find_project_root(&cwd))
     {
-        return Ok(root);
+        return Ok((root, false));
     }
     Err(io::Error::new(
         io::ErrorKind::NotFound,
@@ -170,11 +179,36 @@ fn wait_until_ready(child: &mut Child, timeout: Duration) -> io::Result<()> {
     ))
 }
 
-fn spawn_runtime() -> io::Result<Child> {
-    let root = project_root()?;
+fn spawn_runtime(
+    resource_dir: Option<&Path>,
+    app_data_dir: Option<&Path>,
+    app_cache_dir: Option<&Path>,
+) -> io::Result<Child> {
+    let (root, bundled) = project_root(resource_dir)?;
     let supervisor = root.join("vision_service/runtime_supervisor.py");
-    let uv = env::var_os("ISLAND_FINDER_UV_BIN").unwrap_or_else(|| "uv".into());
+    let bundled_uv = root
+        .join("bin")
+        .join(if cfg!(windows) { "uv.exe" } else { "uv" });
+    let uv = env::var_os("ISLAND_FINDER_UV_BIN")
+        .or_else(|| bundled_uv.is_file().then(|| bundled_uv.into_os_string()))
+        .unwrap_or_else(|| "uv".into());
     let mut command = Command::new(uv);
+    if bundled {
+        let data_root = app_data_dir
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "无法确定应用数据目录"))?;
+        let cache_root = app_cache_dir
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "无法确定应用缓存目录"))?;
+        let settings_dir = data_root.join("data");
+        let environment_dir = data_root.join("venv");
+        let capture_build_dir = cache_root.join("native-capture");
+        fs::create_dir_all(&settings_dir)?;
+        fs::create_dir_all(&capture_build_dir)?;
+        command
+            .env("ISLAND_FINDER_DATA_DIR", settings_dir)
+            .env("ISLAND_FINDER_BUILD_DIR", capture_build_dir)
+            .env("UV_PROJECT_ENVIRONMENT", environment_dir)
+            .env("PYTHONDONTWRITEBYTECODE", "1");
+    }
     command
         .current_dir(&root)
         .arg("run")
@@ -203,7 +237,14 @@ fn main() {
     let app = tauri::Builder::default()
         .manage(runtime.clone())
         .setup(move |app| {
-            let child = spawn_runtime()?;
+            let resource_dir = app.path().resource_dir()?;
+            let app_data_dir = app.path().app_data_dir()?;
+            let app_cache_dir = app.path().app_cache_dir()?;
+            let child = spawn_runtime(
+                Some(&resource_dir),
+                Some(&app_data_dir),
+                Some(&app_cache_dir),
+            )?;
             runtime.install(child);
             runtime.monitor(app.handle().clone());
             Ok(())

@@ -1,6 +1,6 @@
 [package]
 name = "island-finder-desktop"
-version = "0.1.0"
+version = "0.1.1"
 description = "Island Finder desktop runtime owner"
 authors = ["Island Finder contributors"]
 edition = "2024"
