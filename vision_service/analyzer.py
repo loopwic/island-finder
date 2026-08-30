@@ -9,7 +9,7 @@ import numpy as np
 
 
 CoastSide = Literal["south", "east", "west"]
-ANALYZER_VERSION = "2026.08.28-r17"
+ANALYZER_VERSION = "2026.08.30-r18"
 AIRPORT_PLAZA_MAX_CENTER_OFFSET = 0.05
 AIRPORT_PLAZA_MAX_ALIGNMENT_DELTA = 0.02
 AIRPORT_PLAZA_MAX_COHERENT_CENTER_OFFSET = 0.08
@@ -281,6 +281,7 @@ def _peninsula_grass_mask(image: np.ndarray) -> np.ndarray:
 
 def _score_peninsula(
     grass: np.ndarray,
+    water: np.ndarray | None = None,
 ) -> tuple[Factor, Literal["west", "east"] | None]:
     height, width = grass.shape
     start_y = max(0, round(height * 0.05))
@@ -300,30 +301,35 @@ def _score_peninsula(
             None,
         )
 
-    # Measure protrusion from the typical mainland coastline.  Biasing the
-    # baselines towards the sea (the old west-40/east-60 percentiles) lets a
-    # real, sustained peninsula pull its own baseline outwards and therefore
-    # erase most of its measured depth.  The median stays on the mainland for
-    # both sides while the run-length gate below still rejects thin spikes and
-    # single-row segmentation noise.
-    west_baseline = float(np.median(left_edges[valid]))
-    east_baseline = float(np.median(right_edges[valid]))
+    # Measure protrusion from the typical mainland coastline. The mild inward
+    # 60/40 bias resists a real peninsula pulling its own baseline towards the
+    # sea, while the thickness, continuity, and river-shoulder gates below
+    # continue to reject ordinary coast variation and thin spikes.
+    west_baseline = float(np.percentile(left_edges[valid], 60))
+    east_baseline = float(np.percentile(right_edges[valid], 40))
     west_depth = np.where(valid, np.maximum(0, west_baseline - left_edges), 0)
     east_depth = np.where(valid, np.maximum(0, right_edges - east_baseline), 0)
     minimum_depth = width * 0.026
     minimum_run = max(3, round(height * 0.025))
 
-    # The game has several side-coast protrusions, but only the compact,
-    # wide-headed family supplied by the user is suitable for this workflow.
-    # At the fixed 192x144 analysis size that family occupies about 11 rows and
-    # reaches at least ten pixels beyond the mainland.  Smaller bumps and the
-    # taller alternative silhouettes must not be promoted merely because they
-    # have enough total green pixels.
+    # User-confirmed silhouettes may occur on either coast and at different
+    # vertical positions. Their stable feature is a sustained, block-shaped
+    # extension; a thin horizontal bar is not accepted even when it reaches
+    # farther into the sea.
     supported_min_depth_ratio = 0.052
     supported_min_span_ratio = 0.065
-    supported_max_span_ratio = 0.080
+    supported_max_span_ratio = 0.160
     supported_min_profile_fill = 0.80
     supported_max_end_imbalance = 0.40
+    side_mouth_clearance_ratio = 0.08
+    side_mouths: dict[Literal["west", "east"], list[float]] = {
+        "west": [],
+        "east": [],
+    }
+    if water is not None:
+        for mouth_side, position, _confidence in _detect_mouth_positions(water):
+            if mouth_side in side_mouths:
+                side_mouths[mouth_side].append(position)
 
     def candidate_score(
         run_length: int,
@@ -333,44 +339,67 @@ def _score_peninsula(
     ) -> float:
         span_ratio = run_length / height
         depth_ratio = sustained_depth / width
-        extension_score = _ratio_score(depth_ratio, 0.045, 0.065)
-        # The two accepted mirror families are compact rather than a tall strip
-        # of coast.  Reward the middle of the supported height window and taper
-        # towards either boundary.
-        target_span_ratio = (
-            supported_min_span_ratio + supported_max_span_ratio
-        ) / 2
-        span_radius = (supported_max_span_ratio - supported_min_span_ratio) / 2
-        span_score = _clamp01(
-            1
-            - abs(span_ratio - target_span_ratio)
-            / max(0.0001, span_radius)
-        )
+        extension_score = _ratio_score(depth_ratio, 0.045, 0.060)
+        span_score = _ratio_score(span_ratio, 0.040, supported_min_span_ratio)
         fill_score = _ratio_score(profile_fill, 0.76, 0.92)
         balance_score = 1 - _clamp01(end_imbalance / supported_max_end_imbalance)
         shape_score = fill_score * 0.75 + balance_score * 0.25
         return extension_score * 0.60 + span_score * 0.20 + shape_score * 0.20
 
-    def candidate_passes(
+    def candidate_family(
+        side_key: Literal["west", "east"],
+        begin: int,
+        finish: int,
         run_length: int,
         sustained_depth: float,
         profile_fill: float,
         end_imbalance: float,
-        score: float,
-    ) -> bool:
+    ) -> tuple[Literal["block"] | None, bool]:
         span_ratio = run_length / height
-        return (
-            score >= 0.55
-            and supported_min_span_ratio <= span_ratio <= supported_max_span_ratio
-            and sustained_depth / width >= supported_min_depth_ratio
+        depth_ratio = sustained_depth / width
+        begin_ratio = begin / height
+        finish_ratio = finish / height
+        near_side_mouth = any(
+            begin_ratio - side_mouth_clearance_ratio
+            <= position
+            <= finish_ratio + side_mouth_clearance_ratio
+            for position in side_mouths[side_key]
+        )
+        block = (
+            supported_min_span_ratio <= span_ratio <= supported_max_span_ratio
+            and depth_ratio >= supported_min_depth_ratio
             and profile_fill >= supported_min_profile_fill
             and end_imbalance <= supported_max_end_imbalance
+            and not near_side_mouth
         )
+        return ("block" if block else None), near_side_mouth
 
     def strongest_run(
         values: np.ndarray,
-    ) -> tuple[int, float, float, float, float, bool]:
-        candidates: list[tuple[bool, float, float, int, float, float, float]] = []
+        side_key: Literal["west", "east"],
+    ) -> tuple[
+        int,
+        float,
+        float,
+        float,
+        float,
+        float,
+        Literal["block"] | None,
+        bool,
+    ]:
+        candidates: list[
+            tuple[
+                Literal["block"] | None,
+                float,
+                float,
+                int,
+                float,
+                float,
+                float,
+                float,
+                bool,
+            ]
+        ] = []
         begin: int | None = None
         for y in range(start_y, end_y + 1):
             enabled = bool(valid[y] and values[y] >= minimum_depth)
@@ -394,63 +423,93 @@ def _score_peninsula(
                         profile_fill,
                         end_imbalance,
                     )
-                    passed = candidate_passes(
+                    family, near_side_mouth = candidate_family(
+                        side_key,
+                        begin,
+                        finish,
                         len(run),
                         sustained_depth,
                         profile_fill,
                         end_imbalance,
-                        score,
                     )
                     candidates.append(
                         (
-                            passed,
+                            family,
                             score,
                             area,
                             len(run),
                             sustained_depth,
                             profile_fill,
                             end_imbalance,
+                            ((begin + finish) / 2) / height,
+                            near_side_mouth,
                         )
                     )
                 begin = None
         if not candidates:
-            return 0, 0.0, 0.0, 1.0, 0.0, False
+            return 0, 0.0, 0.0, 1.0, 0.0, 0.0, None, False
         (
-            passed,
+            family,
             score,
             _area,
             run_length,
             sustained_depth,
             profile_fill,
             end_imbalance,
-        ) = max(candidates)
-        return run_length, sustained_depth, profile_fill, end_imbalance, score, passed
+            center_ratio,
+            near_side_mouth,
+        ) = max(
+            candidates,
+            key=lambda candidate: (
+                candidate[0] is not None,
+                candidate[1],
+                candidate[2],
+            ),
+        )
+        return (
+            run_length,
+            sustained_depth,
+            profile_fill,
+            end_imbalance,
+            center_ratio,
+            score,
+            family,
+            near_side_mouth,
+        )
 
     (
         west_run,
         west_depth_sustained,
         west_profile_fill,
         west_end_imbalance,
+        west_center_ratio,
         west_score,
-        west_passed,
-    ) = strongest_run(west_depth)
+        west_family,
+        west_near_side_mouth,
+    ) = strongest_run(west_depth, "west")
     (
         east_run,
         east_depth_sustained,
         east_profile_fill,
         east_end_imbalance,
+        east_center_ratio,
         east_score,
-        east_passed,
-    ) = strongest_run(east_depth)
+        east_family,
+        east_near_side_mouth,
+    ) = strongest_run(east_depth, "east")
     side_key: Literal["west", "east"] = (
         "west"
-        if (west_passed, west_score) >= (east_passed, east_score)
+        if (west_family is not None, west_score) >= (east_family is not None, east_score)
         else "east"
     )
     run = west_run if side_key == "west" else east_run
     sustained_depth = west_depth_sustained if side_key == "west" else east_depth_sustained
     profile_fill = west_profile_fill if side_key == "west" else east_profile_fill
     end_imbalance = west_end_imbalance if side_key == "west" else east_end_imbalance
+    center_ratio = west_center_ratio if side_key == "west" else east_center_ratio
+    near_side_mouth = (
+        west_near_side_mouth if side_key == "west" else east_near_side_mouth
+    )
     if run == 0:
         return (
             Factor("peninsula", "指定浮岛结构", 0, False, True, "未可靠识别指定浮岛结构"),
@@ -460,35 +519,39 @@ def _score_peninsula(
     span_ratio = run / height
     depth_ratio = sustained_depth / width
     score = west_score if side_key == "west" else east_score
+    family = west_family if side_key == "west" else east_family
     side = "左岸" if side_key == "west" else "右岸"
-    # Passing here means matching the supported compact wide-head silhouette,
-    # not simply finding any side-coast protrusion.
-    passed = west_passed if side_key == "west" else east_passed
+    # Passing here means matching the user-confirmed block silhouette, not
+    # simply finding any thin side-coast protrusion.
+    passed = family is not None
     depth_percent = depth_ratio * 100
     span_percent = span_ratio * 100
+    center_percent = center_ratio * 100
     if passed:
         summary = (
-            f"{side}指定宽浮岛合格（外伸 {depth_percent:.1f}%"
-            f" · 结构高度 {span_percent:.1f}% · 轮廓完整 {profile_fill * 100:.0f}%）"
+            f"{side}块状浮岛合格（外伸 {depth_percent:.1f}%"
+            f" · 结构高度 {span_percent:.1f}% · 位置 {center_percent:.1f}%"
+            f" · 轮廓完整 {profile_fill * 100:.0f}%）"
         )
     else:
         unmet: list[str] = []
         if depth_ratio < supported_min_depth_ratio:
             unmet.append("外伸需 ≥5.2%")
         if span_ratio < supported_min_span_ratio:
-            unmet.append("结构高度需 ≥6.5%")
+            unmet.append("外伸结构过薄（需 ≥6.5%）")
         if span_ratio > supported_max_span_ratio:
-            unmet.append("不接受高条形外伸")
+            unmet.append("外伸结构过高")
         if profile_fill < supported_min_profile_fill:
             unmet.append("外伸轮廓不完整")
         if end_imbalance > supported_max_end_imbalance:
             unmet.append("外伸轮廓不对称")
-        if score < 0.55:
-            unmet.append("结构匹配度需 ≥55.0%")
+        if near_side_mouth:
+            unmet.append("紧邻横向河口，属于河口岸肩")
         requirement = f" · 未通过：{'、'.join(unmet)}" if unmet else ""
         summary = (
-            f"未匹配指定宽浮岛（外伸 {depth_percent:.1f}%"
-            f" · 结构高度 {span_percent:.1f}% · 轮廓完整 {profile_fill * 100:.0f}%{requirement}）"
+            f"未匹配指定浮岛（外伸 {depth_percent:.1f}%"
+            f" · 结构高度 {span_percent:.1f}% · 位置 {center_percent:.1f}%"
+            f" · 轮廓完整 {profile_fill * 100:.0f}%{requirement}）"
         )
     return Factor("peninsula", "指定浮岛结构", score, passed, True, summary), side_key
 
@@ -1136,7 +1199,10 @@ def analyze_map(image: np.ndarray, include_debug: bool = False) -> dict[str, Any
     rock_sand_bounds = _mask_bounds(rock_masks["sand"])
     rock_factor = _score_rocks(rock_masks["rock"], rock_sand_bounds, rock_masks["water"])
     airport_factor, structure_confidence = _score_airport_plaza(masks["structure"])
-    peninsula_factor, peninsula_side = _score_peninsula(_peninsula_grass_mask(normalized))
+    peninsula_factor, peninsula_side = _score_peninsula(
+        _peninsula_grass_mask(normalized),
+        masks["water"],
+    )
     fox_beach_factor = _score_fox_beach(masks["sand"], peninsula_side)
     beach_factor = _score_beach_shape(masks["sand"], masks["structure"])
     mouth_factor, river_confidence = _analyze_river(masks["river"], masks["water"])

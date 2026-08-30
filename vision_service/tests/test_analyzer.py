@@ -156,13 +156,10 @@ def test_peninsula_prioritizes_extension_but_requires_the_supported_span() -> No
     )
 
     assert extended["passed"] is True
-    assert "指定宽浮岛合格" in extended["summary"]
+    assert "块状浮岛合格" in extended["summary"]
     assert shallow["passed"] is False
     assert too_thin["passed"] is False
-    assert (
-        "指定浮岛结构" in shallow["summary"]
-        or "指定宽浮岛" in shallow["summary"]
-    )
+    assert "指定浮岛" in shallow["summary"]
     assert extended["score"] > shallow["score"]
 
 
@@ -182,7 +179,7 @@ def test_peninsula_uses_the_mainland_median_when_coast_variation_biases_outer_qu
     assert result.passed is True
     assert result.score >= 0.60
     assert side == "west"
-    assert "左岸指定宽浮岛合格" in result.summary
+    assert "左岸块状浮岛合格" in result.summary
 
 
 def test_peninsula_prefers_a_valid_run_over_a_deeper_but_too_thin_spike() -> None:
@@ -204,9 +201,13 @@ def test_peninsula_prefers_a_valid_run_over_a_deeper_but_too_thin_spike() -> Non
     [
         ("supported-east-wide.png", "右岸"),
         ("supported-west-wide.png", "左岸"),
+        # Legacy filenames from the superseded 8% maximum-height rule. These
+        # are user-confirmed block silhouettes and must remain accepted.
+        ("unsupported-west-too-tall.png", "左岸"),
+        ("unsupported-west-too-tall-2.png", "左岸"),
     ],
 )
-def test_only_user_supplied_wide_peninsula_families_pass(name: str, side: str) -> None:
+def test_user_supplied_block_peninsula_families_pass(name: str, side: str) -> None:
     image = cv2.imread(str(PENINSULA_FIXTURES / name))
     assert image is not None
 
@@ -214,7 +215,7 @@ def test_only_user_supplied_wide_peninsula_families_pass(name: str, side: str) -
 
     assert result["passed"] is True
     assert result["label"] == "指定浮岛结构"
-    assert f"{side}指定宽浮岛合格" in result["summary"]
+    assert f"{side}块状浮岛合格" in result["summary"]
 
 
 @pytest.mark.parametrize(
@@ -222,8 +223,6 @@ def test_only_user_supplied_wide_peninsula_families_pass(name: str, side: str) -
     [
         "unsupported-east-shallow.png",
         "unsupported-west-shallow.png",
-        "unsupported-west-too-tall.png",
-        "unsupported-west-too-tall-2.png",
     ],
 )
 def test_other_peninsula_silhouettes_are_rejected(name: str) -> None:
@@ -233,10 +232,7 @@ def test_other_peninsula_silhouettes_are_rejected(name: str) -> None:
     result = factor(analyze_map(image), "peninsula")
 
     assert result["passed"] is False
-    assert (
-        "指定浮岛结构" in result["summary"]
-        or "指定宽浮岛" in result["summary"]
-    )
+    assert "指定浮岛" in result["summary"]
 
 
 def test_beach_shape_ignores_unrelated_structure_below_the_coast() -> None:

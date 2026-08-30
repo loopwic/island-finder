@@ -70,7 +70,7 @@ const screenLabels: Record<ScreenKind, string> = {
 const configuredCriteria = [
   { label: '完整双礁石', hard: true },
   { label: '机场与广场轴线协调', hard: true },
-  { label: '指定宽浮岛结构', hard: true },
+  { label: '指定浮岛结构', hard: true },
   { label: '狐狸海滩贴近左/右边缘', hard: true },
   { label: '圆润海岸线', hard: true },
   { label: '双入海口且非双南', hard: true },
