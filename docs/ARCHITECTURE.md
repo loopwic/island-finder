@@ -23,11 +23,11 @@ Supervisor 在 macOS 与 Windows 上使用同一份 Python 实现，分别启动
 
 `src/` 使用 React、TanStack Router、HeroUI 和 Tailwind。它负责资料配置、设备选择、状态展示、审计查看和候选决策。地图框、页面锚点和地图评分不属于浏览器职责。
 
-浏览器在开发环境连接 `127.0.0.1:48197`；生产构建输出到 `apps/web/dist/` 并由同一后端直接提供，避免另起静态文件服务。
+浏览器在开发环境连接 `127.0.0.1:48197`；生产界面由 Tauri 内嵌，源码/无头运行时的 FastAPI 后端也可直接提供 `apps/web/dist/`，不需要另起静态文件服务。
 
 ### 视觉后端
 
-`vision_service/server.py` 提供本地 API，`backend.py` 管理配置、采集、状态机、稳定帧门禁、三轮页面切换重试和审计。`screen_classifier.py` 判断页面，`candidate_ocr.py` 与 `birthday_ocr.py` 处理文字/数值识别，`analyzer.py` 负责地图因素。
+`vision_service/server.py` 启动 Uvicorn，`http_api.py` 使用 FastAPI 在同一 `48197` 端口提供 REST、MJPEG 与 `/v1/ws` 状态流。前端通过 WebSocket 接收状态变化和独立心跳；短暂的状态快照延迟不会触发后端重启。`backend.py` 管理配置、采集、状态机、稳定帧门禁、三轮页面切换重试和审计。`screen_classifier.py` 判断页面，`candidate_ocr.py` 与 `birthday_ocr.py` 处理文字/数值识别，`analyzer.py` 负责地图因素。
 
 运行配置与审计默认存放在项目根目录的 `data/`。该目录已被 Git 忽略；需要隔离测试实例时可通过 `ISLAND_FINDER_DATA_DIR` 覆盖。后端会过滤旧结构中的未知字段并把地图区域重置为当前固定坐标。
 
@@ -67,7 +67,7 @@ idle → restarting/fastForwarding → enteringName → enteringBirthday
 
 每次启动会先检查 supervisor 控制口、控制器端口和视觉端口。只有控制口同时返回正确服务标识与当前项目路径时，才允许回收旧运行时；其他占用一律报错。Tauri 通过可写 stdin 和父 PID 双向约束 supervisor，supervisor 再监视两个 Python 子服务，因此正常关闭、崩溃、外部停止和下次预清理都覆盖同一释放路径。
 
-网页不能只凭轮询得到的实例 ID 开始自动化。当前页面必须先调用 `arm-start` 取得有效期 5 秒的一次性令牌，再立即提交 `start`；令牌无论成功或失败都会消费。这一门禁避免遗留浏览器页面在新后端启动后误触发真实按键。
+网页不能只凭状态流得到的实例 ID 开始自动化。当前页面必须先调用 `arm-start` 取得有效期 5 秒的一次性令牌，再立即提交 `start`；令牌无论成功或失败都会消费。这一门禁避免遗留浏览器页面在新后端启动后误触发真实按键。
 
 ## 依赖与质量
 

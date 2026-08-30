@@ -11,6 +11,12 @@ const DEFAULT_BACKEND_URL = 'http://127.0.0.1:48197';
 export const BACKEND_URL = import.meta.env.VITE_ISLAND_FINDER_BACKEND_URL?.trim()
   || DEFAULT_BACKEND_URL;
 
+export const BACKEND_STATE_STREAM_URL = (() => {
+  const url = new URL('/v1/ws', BACKEND_URL);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  return url.toString();
+})();
+
 export type BackendCaptureState = {
   connected: boolean;
   deviceIndex: number | null;
@@ -63,6 +69,13 @@ export type BackendState = {
   controller: BackendControllerState;
   settings: FinderSettings;
   logs: RuntimeLog[];
+};
+
+export type BackendStateStreamMessage = {
+  type: 'state' | 'heartbeat';
+  sequence: number;
+  sentAt: number;
+  state?: BackendState;
 };
 
 export type AuditStatus =
@@ -166,6 +179,7 @@ async function request<T>(path: string, init?: RequestInit, timeoutMs = 8_000): 
 
 export const backend = {
   state: () => request<BackendState>('/v1/state', undefined, 2_500),
+  openStateStream: () => new WebSocket(BACKEND_STATE_STREAM_URL),
   captureDevices: () => request<CaptureDevicesResponse>('/v1/capture-devices'),
   auditHistory: () => request<AuditHistoryResponse>('/v1/audits'),
   audit: (auditId: string) => request<SelectionAudit>(`/v1/audits/${encodeURIComponent(auditId)}`),

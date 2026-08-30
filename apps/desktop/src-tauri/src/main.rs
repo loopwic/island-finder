@@ -35,7 +35,6 @@ struct RuntimeProcessInner {
     child: Mutex<Option<Child>>,
     launch: Mutex<Option<RuntimeLaunch>>,
     stopping: AtomicBool,
-    restart_requested: AtomicBool,
     monitor_started: AtomicBool,
     recovery_exhausted: AtomicBool,
 }
@@ -55,15 +54,6 @@ impl RuntimeProcess {
             .child
             .lock()
             .expect("runtime child lock poisoned") = Some(child);
-    }
-
-    fn request_restart(&self) -> Result<(), String> {
-        if self.inner.stopping.load(Ordering::SeqCst) {
-            return Err("桌面应用正在退出，无法重新连接后端".to_string());
-        }
-        self.inner.restart_requested.store(true, Ordering::SeqCst);
-        self.inner.recovery_exhausted.store(false, Ordering::SeqCst);
-        Ok(())
     }
 
     fn take_child(&self) -> Option<Child> {
@@ -149,18 +139,6 @@ impl RuntimeProcess {
                 if runtime.inner.stopping.load(Ordering::SeqCst) {
                     return;
                 }
-                if runtime
-                    .inner
-                    .restart_requested
-                    .swap(false, Ordering::SeqCst)
-                {
-                    if let Some(child) = runtime.take_child() {
-                        Self::stop_child(child);
-                    }
-                    runtime.recover();
-                    continue;
-                }
-
                 let child_result = {
                     let mut guard = runtime
                         .inner
@@ -207,18 +185,12 @@ impl RuntimeProcess {
         if self.inner.stopping.swap(true, Ordering::SeqCst) {
             return;
         }
-        self.inner.restart_requested.store(false, Ordering::SeqCst);
         self.inner.recovery_exhausted.store(true, Ordering::SeqCst);
         let Some(child) = self.take_child() else {
             return;
         };
         Self::stop_child(child);
     }
-}
-
-#[tauri::command]
-fn restart_runtime(runtime: tauri::State<'_, RuntimeProcess>) -> Result<(), String> {
-    runtime.request_restart()
 }
 
 fn find_project_root(start: &Path) -> Option<PathBuf> {
@@ -348,7 +320,6 @@ fn main() {
     let runtime = RuntimeProcess::default();
     let app = tauri::Builder::default()
         .manage(runtime.clone())
-        .invoke_handler(tauri::generate_handler![restart_runtime])
         .setup(move |app| {
             let launch = RuntimeLaunch {
                 resource_dir: Some(app.path().resource_dir()?),

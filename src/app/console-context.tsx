@@ -1,11 +1,10 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { backend, type BackendState } from '../backend/client';
 import {
-  nextConnectionPollDelay,
-  statusAfterFailure,
-  type BackendConnectionStatus,
-} from '../backend/connection';
-import { restartDesktopRuntime } from '../backend/desktop-runtime';
+  backend,
+  type BackendState,
+  type BackendStateStreamMessage,
+} from '../backend/client';
+import type { BackendConnectionStatus } from '../backend/connection';
 import { detectNameInputMode, normalizePinyin, validateName } from '../domain/name-input';
 import { DEFAULT_SETTINGS, INITIAL_RUNTIME } from '../domain/defaults';
 import { loadSettings } from '../domain/storage';
@@ -61,108 +60,170 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   const settingsDirty = useRef(false);
   const settingsEditRevision = useRef(0);
   const saveTimer = useRef<number | null>(null);
-  const refreshState = useRef<((syncSettings?: boolean) => Promise<boolean>) | null>(null);
+  const reconnectStateStream = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    let failures = 0;
-    let pollTimer: number | null = null;
-    let inFlight: Promise<boolean> | null = null;
+    let socket: WebSocket | null = null;
+    let reconnectTimer: number | null = null;
+    let reconnectAttempt = 0;
+    let openedAt = Date.now();
+    let lastMessageAt = 0;
+    let hydratingSettings = false;
+    let pendingInitialState: BackendState | null = null;
+    let syncSettingsOnNextState = true;
 
-    const scheduleNext = (status: BackendConnectionStatus) => {
-      if (cancelled) return;
-      if (pollTimer !== null) window.clearTimeout(pollTimer);
-      pollTimer = window.setTimeout(
-        () => void refresh(),
-        nextConnectionPollDelay(status),
-      );
+    const clearReconnectTimer = () => {
+      if (reconnectTimer === null) return;
+      window.clearTimeout(reconnectTimer);
+      reconnectTimer = null;
     };
 
-    const refresh = (syncSettings = false): Promise<boolean> => {
-      if (inFlight) return inFlight;
-      if (pollTimer !== null) {
-        window.clearTimeout(pollTimer);
-        pollTimer = null;
+    const acceptState = (next: BackendState) => {
+      lastMessageAt = Date.now();
+      reconnectAttempt = 0;
+      setState(next);
+      setConnectionStatus('connected');
+      setConnectionError(null);
+
+      if (settingsHydrated.current) {
+        if (syncSettingsOnNextState && !settingsDirty.current) {
+          setSettings(next.settings);
+          setSettingsSyncState('saved');
+        }
+        syncSettingsOnNextState = false;
+        return;
       }
 
-      const operation = (async () => {
+      pendingInitialState = next;
+      if (hydratingSettings) return;
+      hydratingSettings = true;
+      void (async () => {
         try {
-          let next = await backend.state();
-          if (cancelled) return false;
-
-          if (!settingsHydrated.current) {
-            const local = loadSettings();
-            if (!next.settings.identity.name && local.identity.name) {
-              const migrated = await backend.saveSettings({ ...next.settings, ...local });
-              if (cancelled) return false;
-              next = { ...next, settings: migrated };
-              setNotice('已将浏览器里的旧配置迁移到常驻后端');
-            }
-            setSettings(next.settings);
-            settingsHydrated.current = true;
-            settingsDirty.current = false;
-            setSettingsLoaded(true);
-            setSettingsSyncState('saved');
-          } else if (syncSettings && !settingsDirty.current) {
-            setSettings(next.settings);
-            setSettingsSyncState('saved');
+          let initial = pendingInitialState;
+          pendingInitialState = null;
+          if (!initial) return;
+          const local = loadSettings();
+          if (!initial.settings.identity.name && local.identity.name) {
+            const migrated = await backend.saveSettings({ ...initial.settings, ...local });
+            if (cancelled) return;
+            initial = { ...initial, settings: migrated };
+            setState(initial);
+            setNotice('已将浏览器里的旧配置迁移到常驻后端');
           }
-          failures = 0;
-          setState(next);
-          setConnectionStatus('connected');
-          setConnectionError(null);
-          return true;
+          if (cancelled) return;
+          setSettings(initial.settings);
+          settingsHydrated.current = true;
+          settingsDirty.current = false;
+          syncSettingsOnNextState = false;
+          setSettingsLoaded(true);
+          setSettingsSyncState('saved');
         } catch (error) {
-          if (cancelled) return false;
-          failures += 1;
-          const message = error instanceof Error ? error.message : String(error);
-          const status = statusAfterFailure(failures);
-          setConnectionStatus(status);
-          setConnectionError(message);
-          return false;
+          if (cancelled) return;
+          setSettingsSyncState('error');
+          setNotice(error instanceof Error ? error.message : String(error));
         } finally {
-          inFlight = null;
-          if (!cancelled) {
-            const status = failures === 0 ? 'connected' : statusAfterFailure(failures);
-            scheduleNext(status);
-          }
+          hydratingSettings = false;
         }
       })();
-      inFlight = operation;
-      return operation;
     };
 
-    const syncSettingsOnFocus = () => void refresh(true);
+    const scheduleReconnect = () => {
+      if (cancelled || reconnectTimer !== null) return;
+      const delay = Math.min(5_000, 400 * (2 ** Math.min(reconnectAttempt, 4)));
+      reconnectAttempt += 1;
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, delay);
+    };
 
-    refreshState.current = refresh;
-    void refresh(true);
-    window.addEventListener('focus', syncSettingsOnFocus);
+    const connect = () => {
+      if (cancelled) return;
+      clearReconnectTimer();
+      openedAt = Date.now();
+      lastMessageAt = 0;
+      setConnectionStatus((current) => current === 'connected' ? 'recovering' : 'connecting');
+      try {
+        const nextSocket = backend.openStateStream();
+        socket = nextSocket;
+        nextSocket.addEventListener('open', () => {
+          if (cancelled || socket !== nextSocket) return;
+          openedAt = Date.now();
+        });
+        nextSocket.addEventListener('message', (event) => {
+          if (cancelled || socket !== nextSocket) return;
+          try {
+            const message = JSON.parse(String(event.data)) as BackendStateStreamMessage;
+            lastMessageAt = Date.now();
+            setConnectionStatus('connected');
+            setConnectionError(null);
+            if (message.type === 'state' && message.state) acceptState(message.state);
+          } catch {
+            setConnectionStatus('recovering');
+            setConnectionError('后端状态通道返回了无法解析的数据，正在等待下一帧');
+          }
+        });
+        nextSocket.addEventListener('close', () => {
+          if (cancelled || socket !== nextSocket) return;
+          socket = null;
+          setConnectionStatus('recovering');
+          setConnectionError('后端状态通道已断开，正在自动重连');
+          scheduleReconnect();
+        });
+        nextSocket.addEventListener('error', () => {
+          if (cancelled || socket !== nextSocket) return;
+          setConnectionStatus('recovering');
+        });
+      } catch (error) {
+        setConnectionStatus('recovering');
+        setConnectionError(error instanceof Error ? error.message : String(error));
+        scheduleReconnect();
+      }
+    };
+
+    reconnectStateStream.current = () => {
+      clearReconnectTimer();
+      reconnectAttempt = 0;
+      syncSettingsOnNextState = true;
+      const previous = socket;
+      socket = null;
+      previous?.close(1000, 'manual reconnect');
+      connect();
+    };
+
+    const staleTimer = window.setInterval(() => {
+      const staleFor = Date.now() - (lastMessageAt || openedAt);
+      if (staleFor < 10_000) return;
+      if (staleFor < 30_000) {
+        setConnectionStatus('recovering');
+        setConnectionError('状态流暂时没有新消息，自动化仍在后端运行');
+        return;
+      }
+      setConnectionStatus('disconnected');
+      setConnectionError('状态流已超过 30 秒没有响应，正在重新建立连接');
+      const previous = socket;
+      socket = null;
+      previous?.close(4000, 'state stream stale');
+      scheduleReconnect();
+    }, 1_000);
+
+    connect();
     return () => {
       cancelled = true;
-      refreshState.current = null;
-      if (pollTimer !== null) window.clearTimeout(pollTimer);
-      window.removeEventListener('focus', syncSettingsOnFocus);
+      reconnectStateStream.current = null;
+      clearReconnectTimer();
+      window.clearInterval(staleTimer);
+      const previous = socket;
+      socket = null;
+      previous?.close(1000, 'view closed');
     };
   }, []);
 
   const reconnect = async () => {
     setConnectionStatus('connecting');
     setConnectionError(null);
-    try {
-      const runtimeRestartRequested = await restartDesktopRuntime();
-      if (runtimeRestartRequested) {
-        setConnectionStatus('recovering');
-        await new Promise((resolve) => window.setTimeout(resolve, 600));
-      }
-      const connected = await refreshState.current?.(true);
-      if (connected === false && !runtimeRestartRequested) {
-        setConnectionStatus('disconnected');
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setConnectionStatus('disconnected');
-      setConnectionError(message);
-    }
+    reconnectStateStream.current?.();
   };
 
   useEffect(() => {
