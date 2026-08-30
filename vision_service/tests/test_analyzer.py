@@ -196,14 +196,35 @@ def test_peninsula_prefers_a_valid_run_over_a_deeper_but_too_thin_spike() -> Non
     assert "结构高度 7.6%" in result.summary
 
 
+def test_peninsula_rejects_a_block_within_the_side_river_shoulder_zone() -> None:
+    grass = np.zeros((144, 192), dtype=np.uint8)
+    grass[8:119, 44:146] = 255
+    grass[71:82, 146:156] = 255
+    water = np.zeros_like(grass)
+    water[55:61, 136:160] = 255
+
+    result, side = _score_peninsula(grass, water)
+
+    assert result.passed is False
+    assert side == "east"
+    assert "紧邻横向河口" in result.summary
+
+    farther_grass = np.zeros_like(grass)
+    farther_grass[8:119, 44:146] = 255
+    farther_grass[88:108, 146:156] = 255
+    farther_result, farther_side = _score_peninsula(farther_grass, water)
+
+    assert farther_result.passed is True
+    assert farther_side == "east"
+
+
 @pytest.mark.parametrize(
     ("name", "side"),
     [
         ("supported-east-wide.png", "右岸"),
         ("supported-west-wide.png", "左岸"),
-        # Legacy filenames from the superseded 8% maximum-height rule. These
-        # are user-confirmed block silhouettes and must remain accepted.
-        ("unsupported-west-too-tall.png", "左岸"),
+        # Legacy filename from the superseded 8% maximum-height rule. This is
+        # a user-confirmed block silhouette and must remain accepted.
         ("unsupported-west-too-tall-2.png", "左岸"),
     ],
 )
@@ -223,6 +244,7 @@ def test_user_supplied_block_peninsula_families_pass(name: str, side: str) -> No
     [
         "unsupported-east-shallow.png",
         "unsupported-west-shallow.png",
+        "unsupported-west-too-tall.png",
     ],
 )
 def test_other_peninsula_silhouettes_are_rejected(name: str) -> None:

@@ -9,7 +9,7 @@ import numpy as np
 
 
 CoastSide = Literal["south", "east", "west"]
-ANALYZER_VERSION = "2026.08.30-r18"
+ANALYZER_VERSION = "2026.08.30-r19"
 AIRPORT_PLAZA_MAX_CENTER_OFFSET = 0.05
 AIRPORT_PLAZA_MAX_ALIGNMENT_DELTA = 0.02
 AIRPORT_PLAZA_MAX_COHERENT_CENTER_OFFSET = 0.08
@@ -321,7 +321,7 @@ def _score_peninsula(
     supported_max_span_ratio = 0.160
     supported_min_profile_fill = 0.80
     supported_max_end_imbalance = 0.40
-    side_mouth_clearance_ratio = 0.08
+    side_mouth_clearance_ratio = 0.12
     side_mouths: dict[Literal["west", "east"], list[float]] = {
         "west": [],
         "east": [],
