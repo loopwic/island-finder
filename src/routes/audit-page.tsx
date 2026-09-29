@@ -269,7 +269,7 @@ function AuditDetail({ record }: { record: SelectionAudit }) {
 
 export function AuditPage() {
   const [audits, setAudits] = useState<AuditSummary[]>([]);
-  const [limit, setLimit] = useState(20);
+  const [limit, setLimit] = useState(100);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedRecord, setSelectedRecord] = useState<SelectionAudit | null>(null);
   const [historyLoading, setHistoryLoading] = useState(true);

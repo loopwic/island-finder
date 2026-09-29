@@ -21,6 +21,12 @@ REGIONS = [
 ]
 
 
+def test_audit_store_keeps_one_hundred_records_by_default(tmp_path):
+    store = SelectionAuditStore(tmp_path)
+
+    assert store.limit == 100
+
+
 def _frame() -> np.ndarray:
     frame = np.zeros((80, 120, 3), dtype=np.uint8)
     colors = ((35, 80, 180), (60, 150, 90), (190, 150, 40), (150, 70, 170))

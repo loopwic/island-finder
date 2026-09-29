@@ -9,11 +9,13 @@ import numpy as np
 
 
 CoastSide = Literal["south", "east", "west"]
-ANALYZER_VERSION = "2026.08.30-r19"
+ANALYZER_VERSION = "2026.09.05-r28"
 AIRPORT_PLAZA_MAX_CENTER_OFFSET = 0.05
 AIRPORT_PLAZA_MAX_ALIGNMENT_DELTA = 0.02
 AIRPORT_PLAZA_MAX_COHERENT_CENTER_OFFSET = 0.08
 AIRPORT_PLAZA_MAX_COHERENT_ALIGNMENT_DELTA = 0.01
+AIRPORT_PLAZA_MIN_DISTANCE = 0.20
+AIRPORT_EXIT_LEFT_OFFSET = 0.023
 
 
 @dataclass
@@ -301,26 +303,26 @@ def _score_peninsula(
             None,
         )
 
-    # Measure protrusion from the typical mainland coastline. The mild inward
-    # 60/40 bias resists a real peninsula pulling its own baseline towards the
-    # sea, while the thickness, continuity, and river-shoulder gates below
-    # continue to reject ordinary coast variation and thin spikes.
+    # Establish the mainland base from the green land itself.  The mild inward
+    # 60/40 bias prevents a real peninsula from pulling that base out to sea.
+    # The old detector compared each row with this base and then scored the
+    # longest run of deep rows.  That split tapered but valid silhouettes into
+    # fragments and could select a thin river shoulder instead of the much
+    # larger exterior shape.  Build the complete green area outside the base
+    # first, then measure its connected components.
     west_baseline = float(np.percentile(left_edges[valid], 60))
     east_baseline = float(np.percentile(right_edges[valid], 40))
-    west_depth = np.where(valid, np.maximum(0, west_baseline - left_edges), 0)
-    east_depth = np.where(valid, np.maximum(0, right_edges - east_baseline), 0)
-    minimum_depth = width * 0.026
-    minimum_run = max(3, round(height * 0.025))
-
-    # User-confirmed silhouettes may occur on either coast and at different
-    # vertical positions. Their stable feature is a sustained, block-shaped
-    # extension; a thin horizontal bar is not accepted even when it reaches
-    # farther into the sea.
-    supported_min_depth_ratio = 0.052
+    pixel_count = height * width
+    supported_min_depth_ratio = 0.065
+    supported_min_area_ratio = 0.0032
+    # Convert total exterior area back to an equivalent full-depth thickness:
+    # area / maximum-depth / map-height. This keeps tapered edges in the
+    # measurement while separating a real block from a similarly wide but
+    # low-area horizontal bar.
+    supported_min_area_thickness_ratio = 0.050
     supported_min_span_ratio = 0.065
-    supported_max_span_ratio = 0.160
-    supported_min_profile_fill = 0.80
-    supported_max_end_imbalance = 0.40
+    supported_max_span_ratio = 0.170
+    supported_min_compactness = 0.54
     side_mouth_clearance_ratio = 0.12
     side_mouths: dict[Literal["west", "east"], list[float]] = {
         "west": [],
@@ -331,227 +333,164 @@ def _score_peninsula(
             if mouth_side in side_mouths:
                 side_mouths[mouth_side].append(position)
 
-    def candidate_score(
-        run_length: int,
-        sustained_depth: float,
-        profile_fill: float,
-        end_imbalance: float,
-    ) -> float:
-        span_ratio = run_length / height
-        depth_ratio = sustained_depth / width
-        extension_score = _ratio_score(depth_ratio, 0.045, 0.060)
-        span_score = _ratio_score(span_ratio, 0.040, supported_min_span_ratio)
-        fill_score = _ratio_score(profile_fill, 0.76, 0.92)
-        balance_score = 1 - _clamp01(end_imbalance / supported_max_end_imbalance)
-        shape_score = fill_score * 0.75 + balance_score * 0.25
-        return extension_score * 0.60 + span_score * 0.20 + shape_score * 0.20
-
-    def candidate_family(
+    def exterior_components(
         side_key: Literal["west", "east"],
-        begin: int,
-        finish: int,
-        run_length: int,
-        sustained_depth: float,
-        profile_fill: float,
-        end_imbalance: float,
-    ) -> tuple[Literal["block"] | None, bool]:
-        span_ratio = run_length / height
-        depth_ratio = sustained_depth / width
-        begin_ratio = begin / height
-        finish_ratio = finish / height
-        near_side_mouth = any(
-            begin_ratio - side_mouth_clearance_ratio
-            <= position
-            <= finish_ratio + side_mouth_clearance_ratio
-            for position in side_mouths[side_key]
-        )
-        block = (
-            supported_min_span_ratio <= span_ratio <= supported_max_span_ratio
-            and depth_ratio >= supported_min_depth_ratio
-            and profile_fill >= supported_min_profile_fill
-            and end_imbalance <= supported_max_end_imbalance
-            and not near_side_mouth
-        )
-        return ("block" if block else None), near_side_mouth
-
-    def strongest_run(
-        values: np.ndarray,
-        side_key: Literal["west", "east"],
-    ) -> tuple[
-        int,
-        float,
-        float,
-        float,
-        float,
-        float,
-        Literal["block"] | None,
-        bool,
-    ]:
-        candidates: list[
-            tuple[
-                Literal["block"] | None,
-                float,
-                float,
-                int,
-                float,
-                float,
-                float,
-                float,
-                bool,
-            ]
-        ] = []
-        begin: int | None = None
+        baseline: float,
+    ) -> list[tuple[int, float, float, float, float, float, bool]]:
+        exterior = np.zeros_like(grass)
         for y in range(start_y, end_y + 1):
-            enabled = bool(valid[y] and values[y] >= minimum_depth)
-            if enabled and begin is None:
-                begin = y
-            if begin is not None and (not enabled or y == end_y):
-                finish = y if enabled and y == end_y else y - 1
-                run = values[begin : finish + 1]
-                if len(run) >= minimum_run:
-                    sustained_depth = float(np.percentile(run, 25))
-                    area = float(run.sum())
-                    peak_depth = float(run.max())
-                    profile_fill = area / max(1.0, peak_depth * len(run))
-                    end_imbalance = abs(float(run[0]) - float(run[-1])) / max(
-                        1.0,
-                        peak_depth,
-                    )
-                    score = candidate_score(
-                        len(run),
-                        sustained_depth,
-                        profile_fill,
-                        end_imbalance,
-                    )
-                    family, near_side_mouth = candidate_family(
-                        side_key,
-                        begin,
-                        finish,
-                        len(run),
-                        sustained_depth,
-                        profile_fill,
-                        end_imbalance,
-                    )
-                    candidates.append(
-                        (
-                            family,
-                            score,
-                            area,
-                            len(run),
-                            sustained_depth,
-                            profile_fill,
-                            end_imbalance,
-                            ((begin + finish) / 2) / height,
-                            near_side_mouth,
-                        )
-                    )
-                begin = None
-        if not candidates:
-            return 0, 0.0, 0.0, 1.0, 0.0, 0.0, None, False
-        (
-            family,
-            score,
-            _area,
-            run_length,
-            sustained_depth,
-            profile_fill,
-            end_imbalance,
-            center_ratio,
-            near_side_mouth,
-        ) = max(
-            candidates,
-            key=lambda candidate: (
-                candidate[0] is not None,
-                candidate[1],
-                candidate[2],
-            ),
-        )
-        return (
-            run_length,
-            sustained_depth,
-            profile_fill,
-            end_imbalance,
-            center_ratio,
-            score,
-            family,
-            near_side_mouth,
-        )
+            if not valid[y]:
+                continue
+            if side_key == "west":
+                boundary = max(0, min(width, int(np.floor(baseline))))
+                exterior[y, :boundary] = grass[y, :boundary]
+            else:
+                boundary = max(0, min(width, int(np.ceil(baseline)) + 1))
+                exterior[y, boundary:] = grass[y, boundary:]
 
-    (
-        west_run,
-        west_depth_sustained,
-        west_profile_fill,
-        west_end_imbalance,
-        west_center_ratio,
-        west_score,
-        west_family,
-        west_near_side_mouth,
-    ) = strongest_run(west_depth, "west")
-    (
-        east_run,
-        east_depth_sustained,
-        east_profile_fill,
-        east_end_imbalance,
-        east_center_ratio,
-        east_score,
-        east_family,
-        east_near_side_mouth,
-    ) = strongest_run(east_depth, "east")
-    side_key: Literal["west", "east"] = (
-        "west"
-        if (west_family is not None, west_score) >= (east_family is not None, east_score)
-        else "east"
+        candidates: list[tuple[int, float, float, float, float, float, bool]] = []
+        minimum_component_area = max(6, round(pixel_count * 0.0005))
+        for component in _components(exterior):
+            if component.area < minimum_component_area:
+                continue
+            depth_pixels = (
+                baseline - component.x
+                if side_key == "west"
+                else component.max_x - baseline
+            )
+            depth_ratio = max(0.0, depth_pixels / width)
+            area_ratio = component.area / pixel_count
+            span_ratio = component.height / height
+            compactness = component.solidity
+            center_ratio = component.center_y / height
+            begin_ratio = component.y / height
+            finish_ratio = component.max_y / height
+            near_side_mouth = any(
+                begin_ratio - side_mouth_clearance_ratio
+                <= position
+                <= finish_ratio + side_mouth_clearance_ratio
+                for position in side_mouths[side_key]
+            )
+            candidates.append(
+                (
+                    component.area,
+                    depth_ratio,
+                    area_ratio,
+                    span_ratio,
+                    compactness,
+                    center_ratio,
+                    near_side_mouth,
+                )
+            )
+        return candidates
+
+    candidates: list[
+        tuple[
+            Literal["west", "east"],
+            int,
+            float,
+            float,
+            float,
+            float,
+            float,
+            bool,
+        ]
+    ] = []
+    candidates.extend(
+        ("west", *candidate)
+        for candidate in exterior_components("west", west_baseline)
     )
-    run = west_run if side_key == "west" else east_run
-    sustained_depth = west_depth_sustained if side_key == "west" else east_depth_sustained
-    profile_fill = west_profile_fill if side_key == "west" else east_profile_fill
-    end_imbalance = west_end_imbalance if side_key == "west" else east_end_imbalance
-    center_ratio = west_center_ratio if side_key == "west" else east_center_ratio
-    near_side_mouth = (
-        west_near_side_mouth if side_key == "west" else east_near_side_mouth
+    candidates.extend(
+        ("east", *candidate)
+        for candidate in exterior_components("east", east_baseline)
     )
-    if run == 0:
+    if not candidates:
         return (
             Factor("peninsula", "指定浮岛结构", 0, False, True, "未可靠识别指定浮岛结构"),
             None,
         )
 
-    span_ratio = run / height
-    depth_ratio = sustained_depth / width
-    score = west_score if side_key == "west" else east_score
-    family = west_family if side_key == "west" else east_family
+    # Exterior area is the primary selector.  River proximity is deliberately
+    # evaluated only after selection so a deep but thin river shoulder cannot
+    # outrank a larger, coherent green silhouette elsewhere on the coast.
+    deep_candidates = [
+        candidate
+        for candidate in candidates
+        if candidate[2] >= supported_min_depth_ratio
+    ]
+    candidate_pool = deep_candidates or candidates
+    (
+        side_key,
+        _area_pixels,
+        depth_ratio,
+        area_ratio,
+        span_ratio,
+        compactness,
+        center_ratio,
+        near_side_mouth,
+    ) = max(
+        candidate_pool,
+        key=lambda candidate: (
+            candidate[3],
+            candidate[2],
+            candidate[5],
+        ),
+    )
+    extension_score = _ratio_score(depth_ratio, 0.045, 0.075)
+    area_score = _ratio_score(area_ratio, 0.0020, 0.0050)
+    area_thickness_ratio = area_ratio / max(depth_ratio, 0.0001)
+    span_score = _ratio_score(span_ratio, 0.040, 0.100)
+    compactness_score = _ratio_score(compactness, 0.42, 0.68)
+    score = (
+        extension_score * 0.35
+        + area_score * 0.35
+        + span_score * 0.15
+        + compactness_score * 0.15
+    )
+    passed = (
+        depth_ratio >= supported_min_depth_ratio
+        and area_ratio >= supported_min_area_ratio
+        and area_thickness_ratio >= supported_min_area_thickness_ratio
+        and supported_min_span_ratio <= span_ratio <= supported_max_span_ratio
+        and compactness >= supported_min_compactness
+        and not near_side_mouth
+    )
     side = "左岸" if side_key == "west" else "右岸"
-    # Passing here means matching the user-confirmed block silhouette, not
-    # simply finding any thin side-coast protrusion.
-    passed = family is not None
     depth_percent = depth_ratio * 100
+    area_percent = area_ratio * 100
+    area_thickness_percent = area_thickness_ratio * 100
     span_percent = span_ratio * 100
     center_percent = center_ratio * 100
     if passed:
         summary = (
             f"{side}块状浮岛合格（外伸 {depth_percent:.1f}%"
-            f" · 结构高度 {span_percent:.1f}% · 位置 {center_percent:.1f}%"
-            f" · 轮廓完整 {profile_fill * 100:.0f}%）"
+            f" · 外形面积 {area_percent:.2f}% · 面积等效厚度 {area_thickness_percent:.1f}%"
+            f" · 结构高度 {span_percent:.1f}%"
+            f" · 形状紧凑 {compactness * 100:.0f}% · 位置 {center_percent:.1f}%）"
         )
     else:
         unmet: list[str] = []
         if depth_ratio < supported_min_depth_ratio:
-            unmet.append("外伸需 ≥5.2%")
+            unmet.append("外伸不足（需 ≥6.5%）")
+        if area_ratio < supported_min_area_ratio:
+            unmet.append("外形总面积不足（需 ≥0.32%）")
+        if area_thickness_ratio < supported_min_area_thickness_ratio:
+            unmet.append("外形总面积相对外伸不足（面积等效厚度需 ≥5.0%）")
         if span_ratio < supported_min_span_ratio:
             unmet.append("外伸结构过薄（需 ≥6.5%）")
         if span_ratio > supported_max_span_ratio:
             unmet.append("外伸结构过高")
-        if profile_fill < supported_min_profile_fill:
-            unmet.append("外伸轮廓不完整")
-        if end_imbalance > supported_max_end_imbalance:
-            unmet.append("外伸轮廓不对称")
+        if compactness < supported_min_compactness:
+            unmet.append("外形不够块状")
         if near_side_mouth:
             unmet.append("紧邻横向河口，属于河口岸肩")
         requirement = f" · 未通过：{'、'.join(unmet)}" if unmet else ""
         summary = (
             f"未匹配指定浮岛（外伸 {depth_percent:.1f}%"
-            f" · 结构高度 {span_percent:.1f}% · 位置 {center_percent:.1f}%"
-            f" · 轮廓完整 {profile_fill * 100:.0f}%{requirement}）"
+            f" · 外形面积 {area_percent:.2f}% · 面积等效厚度 {area_thickness_percent:.1f}%"
+            f" · 结构高度 {span_percent:.1f}%"
+            f" · 形状紧凑 {compactness * 100:.0f}% · 位置 {center_percent:.1f}%"
+            f"{requirement}）"
         )
     return Factor("peninsula", "指定浮岛结构", score, passed, True, summary), side_key
 
@@ -876,17 +815,24 @@ def _score_rocks(
         )
 
     solidity = float(np.mean([component.solidity for component in large])) if large else 0
-    count_score = 1 if len(large) == 2 and len(large_sides) == 2 else 0.38 if len(large) == 1 else 0.08
+    single_preferred = len(large) == 1 and len(large_sides) == 1
+    pair_accepted = len(large) == 2 and len(large_sides) == 2
+    # A clean coast with one complete optional reef is the preferred layout.
+    # Two complete formations remain acceptable, including the established
+    # dominant-plus-complementary distribution, but rank slightly lower.
+    count_score = 1 if single_preferred else 0.92 if pair_accepted else 0.08
     fragment_score = 1 if not fragments else 0.35 if len(fragments) == 1 else 0
     score = count_score * 0.72 + fragment_score * 0.20 + _ratio_score(solidity, 0.18, 0.48) * 0.08
-    passed = len(large) == 2 and len(large_sides) == 2 and not fragments and solidity >= 0.45
+    passed = (single_preferred or pair_accepted) and not fragments and solidity >= 0.45
     large_text = (
         (
             f"2 块完整大礁石（{complementary_distribution}，总量合格）"
             if complementary_distribution
             else "2 块完整大礁石（左右各 1）"
         )
-        if len(large) == 2 and len(large_sides) == 2
+        if pair_accepted
+        else "1 块完整大礁石（单块优先）"
+        if single_preferred
         else f"{len(large)} 块完整大礁石"
     )
     west_fragments = sum(component.center_x < width / 2 for component in fragments)
@@ -967,9 +913,12 @@ def _score_airport_plaza(structure: np.ndarray) -> tuple[Factor, float]:
         return Factor("airportPlaza", "机场与广场", 0, False, True, "机场或广场定位置信度不足"), 0
     airport_x, airport_y = airport.center_x / width, airport.center_y / height
     plaza_x, plaza_y = plaza.center_x / width, plaza.center_y / height
-    # The map icon's airport exit is slightly left of the airport body's center.
-    # Compare the exit—not the body centroid—to the plaza center.
-    airport_exit_x = airport_x - 0.015
+    # The airport exit is visibly left of the building body's center. A body
+    # positioned about 2.3% to the right of the plaza is therefore the ideal
+    # layout: compare the corrected exit—not the building centroid—to the
+    # plaza center.
+    airport_exit_x = airport_x - AIRPORT_EXIT_LEFT_OFFSET
+    body_alignment_delta = airport_x - plaza_x
     alignment_delta = abs(airport_exit_x - plaza_x)
     distance = float(np.hypot(airport_exit_x - plaza_x, airport_y - plaza_y))
     airport_center_offset = abs(airport_exit_x - 0.5)
@@ -979,12 +928,8 @@ def _score_airport_plaza(structure: np.ndarray) -> tuple[Factor, float]:
         + _clamp01(1 - plaza_center_offset / 0.10)
     ) / 2
     alignment_score = _clamp01(1 - alignment_delta / 0.04)
-    if distance < 0.16:
-        distance_score = _ratio_score(distance, 0.10, 0.16)
-    elif distance > 0.30:
-        distance_score = _clamp01(1 - (distance - 0.30) / 0.10)
-    else:
-        distance_score = 1
+    # Require at least 20% separation; greater distances remain acceptable.
+    distance_score = _ratio_score(distance, 0.15, AIRPORT_PLAZA_MIN_DISTANCE)
     score = centered_score * 0.32 + alignment_score * 0.43 + distance_score * 0.25
     airport_centered = airport_center_offset <= AIRPORT_PLAZA_MAX_CENTER_OFFSET
     plaza_centered = plaza_center_offset <= AIRPORT_PLAZA_MAX_CENTER_OFFSET
@@ -992,19 +937,17 @@ def _score_airport_plaza(structure: np.ndarray) -> tuple[Factor, float]:
     # A coherent pair can be slightly off the geometric map center without
     # being a bad layout. Preserve the strict individual 5% gate normally,
     # but admit a bounded shared-axis case only when both structures remain
-    # within 8% and their mutual horizontal error is at most 1%. This accepts
-    # the supplied 6.6% / 7.1% / 0.5% layout while keeping visibly mismatched
-    # pairs such as 6.7% / 9.5% / 2.9% rejected.
+    # within 8% and their mutual horizontal error is at most 1%.
     coherently_offset = (
         airport_center_offset <= AIRPORT_PLAZA_MAX_COHERENT_CENTER_OFFSET
         and plaza_center_offset <= AIRPORT_PLAZA_MAX_COHERENT_CENTER_OFFSET
         and alignment_delta <= AIRPORT_PLAZA_MAX_COHERENT_ALIGNMENT_DELTA
     )
     center_gate = (airport_centered and plaza_centered) or coherently_offset
-    distance_ok = 0.14 <= distance <= 0.34
+    distance_ok = distance >= AIRPORT_PLAZA_MIN_DISTANCE
     vertically_ordered = airport_y > plaza_y
     passed = center_gate and aligned and distance_ok and vertically_ordered
-    distance_label = "过近" if distance < 0.14 else "过远" if distance > 0.34 else "适中"
+    distance_label = "过近" if not distance_ok else "合格"
     violations: list[str] = []
     if not airport_centered and not coherently_offset:
         violations.append(f"机场偏离中线（上限 {AIRPORT_PLAZA_MAX_CENTER_OFFSET * 100:.1f}%）")
@@ -1013,12 +956,13 @@ def _score_airport_plaza(structure: np.ndarray) -> tuple[Factor, float]:
     if not aligned:
         violations.append(f"出口与广场错位（上限 {AIRPORT_PLAZA_MAX_ALIGNMENT_DELTA * 100:.1f}%）")
     if not distance_ok:
-        violations.append(f"间距{distance_label}")
+        violations.append(f"间距过近（需 ≥{AIRPORT_PLAZA_MIN_DISTANCE * 100:.1f}%）")
     if not vertically_ordered:
         violations.append("机场未位于广场南侧")
     violation_label = f" · 未通过：{'、'.join(violations)}" if violations else ""
     coherent_label = " · 共同偏移但轴线一致" if coherently_offset and not (airport_centered and plaza_centered) else ""
     summary = (
+        f"机场本体{'右偏' if body_alignment_delta >= 0 else '左偏'} {abs(body_alignment_delta) * 100:.1f}% · "
         f"机场出口距中线 {airport_center_offset * 100:.1f}% · "
         f"广场距中线 {plaza_center_offset * 100:.1f}% · "
         f"出口横向错位 {alignment_delta * 100:.1f}% · "

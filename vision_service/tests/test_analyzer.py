@@ -23,11 +23,12 @@ def candidate_map(
     *,
     double_south: bool = False,
     fragmented_rock: bool = False,
+    single_large_rock: bool = False,
     fixed_rock_decorations: bool = False,
-    airport_x: int = 250,
+    airport_x: int = 261,
     airport_y: int = 314,
     plaza_x: int = 250,
-    plaza_y: int = 227,
+    plaza_y: int = 160,
     fox_x: int = 105,
     peninsula_height: int = 24,
     peninsula_x: int = 10,
@@ -58,7 +59,8 @@ def candidate_map(
         cv2.line(image, (176, 165), (470, 165), river, 13)
 
     cv2.rectangle(image, (12, 145), (37, 205), rock, -1)
-    cv2.rectangle(image, (443, 210), (469, 275), rock, -1)
+    if not single_large_rock:
+        cv2.rectangle(image, (443, 210), (469, 275), rock, -1)
     cv2.rectangle(image, (55, 2), (115, 18), rock, -1)  # decorative north rocks
     if fragmented_rock:
         cv2.circle(image, (18, 242), 5, rock, -1)
@@ -101,8 +103,13 @@ def factor(result: dict, key: str) -> dict:
 
 ROCK_FIXTURES = Path(__file__).parent / "fixtures" / "coastal-rocks"
 COMPLEMENTARY_REEF_FIXTURE = ROCK_FIXTURES / "complementary-large-reef.png"
+SINGLE_LARGE_REEF_FIXTURE = ROCK_FIXTURES / "supported-single-large.png"
 AIRPORT_PLAZA_FIXTURES = Path(__file__).parent / "fixtures" / "airport-plaza"
 COHERENT_OFFSET_PERFECT_FIXTURE = AIRPORT_PLAZA_FIXTURES / "coherent-offset-perfect.png"
+TOO_CLOSE_AIRPORT_PLAZA_FIXTURE = AIRPORT_PLAZA_FIXTURES / "unsupported-too-close-17.4.png"
+RIGHT_OFFSET_EXIT_ALIGNED_FIXTURE = (
+    AIRPORT_PLAZA_FIXTURES / "right-offset-exit-aligned-too-close.png"
+)
 PENINSULA_FIXTURES = Path(__file__).parent / "fixtures" / "peninsula"
 
 
@@ -172,7 +179,7 @@ def test_peninsula_uses_the_mainland_median_when_coast_variation_biases_outer_qu
     grass[40:75, 39:44] = 255
     # A real sustained west peninsula remains deep and wide relative to the
     # mainland median.  This mirrors audit 1787734230627-964fb133/card 3.
-    grass[20:31, 33:44] = 255
+    grass[20:31, 31:44] = 255
 
     result, side = _score_peninsula(grass)
 
@@ -186,20 +193,56 @@ def test_peninsula_prefers_a_valid_run_over_a_deeper_but_too_thin_spike() -> Non
     grass = np.zeros((144, 192), dtype=np.uint8)
     grass[8:119, 44:146] = 255
     grass[20:25, 20:44] = 255  # deeper, but only 3.5% of the coast height
-    grass[50:61, 33:44] = 255  # less deep, but matches the supported compact span
+    grass[50:61, 31:44] = 255  # less deep, but has the larger supported exterior area
 
     result, side = _score_peninsula(grass)
 
     assert result.passed is True
     assert side == "west"
-    assert "外伸 5.7%" in result.summary
+    assert "外伸 6.8%" in result.summary
     assert "结构高度 7.6%" in result.summary
+    assert "外形面积" in result.summary
+
+
+def test_peninsula_requires_ten_rows_in_the_fixed_grid() -> None:
+    grass = np.zeros((144, 192), dtype=np.uint8)
+    grass[8:119, 44:146] = 255
+    grass[20:29, 31:44] = 255  # 9 / 144 rows = 6.25%, shown as 6.2%.
+
+    too_thin, side = _score_peninsula(grass)
+
+    assert too_thin.passed is False
+    assert side == "west"
+    assert "结构高度 6.2%" in too_thin.summary
+    assert "外伸结构过薄" in too_thin.summary
+
+    thick_enough_grass = np.zeros_like(grass)
+    thick_enough_grass[8:119, 44:146] = 255
+    thick_enough_grass[20:30, 31:44] = 255  # 10 / 144 rows = 6.94%.
+    thick_enough, _ = _score_peninsula(thick_enough_grass)
+
+    assert thick_enough.passed is True
+    assert "结构高度 6.9%" in thick_enough.summary
+
+
+def test_peninsula_rejects_a_tapered_bar_at_the_nine_row_boundary() -> None:
+    grass = np.zeros((144, 192), dtype=np.uint8)
+    grass[8:119, 44:146] = 255
+    for y, depth in zip(range(20, 29), [10, 11, 12, 13, 13, 13, 12, 11, 10]):
+        grass[y, 44 - depth : 44] = 255
+
+    result, side = _score_peninsula(grass)
+
+    assert result.passed is False
+    assert side == "west"
+    assert "结构高度 6.2%" in result.summary
+    assert "外伸结构过薄" in result.summary
 
 
 def test_peninsula_rejects_a_block_within_the_side_river_shoulder_zone() -> None:
     grass = np.zeros((144, 192), dtype=np.uint8)
     grass[8:119, 44:146] = 255
-    grass[71:82, 146:156] = 255
+    grass[71:82, 146:160] = 255
     water = np.zeros_like(grass)
     water[55:61, 136:160] = 255
 
@@ -211,7 +254,7 @@ def test_peninsula_rejects_a_block_within_the_side_river_shoulder_zone() -> None
 
     farther_grass = np.zeros_like(grass)
     farther_grass[8:119, 44:146] = 255
-    farther_grass[88:108, 146:156] = 255
+    farther_grass[88:108, 146:160] = 255
     farther_result, farther_side = _score_peninsula(farther_grass, water)
 
     assert farther_result.passed is True
@@ -223,6 +266,10 @@ def test_peninsula_rejects_a_block_within_the_side_river_shoulder_zone() -> None
     [
         ("supported-east-wide.png", "右岸"),
         ("supported-west-wide.png", "左岸"),
+        # Exact audit 1788420150791-7677df7c/card 4. The former row-run
+        # detector selected its smaller river shoulder instead of this larger
+        # green exterior component.
+        ("supported-west-exterior-area.png", "左岸"),
         # Legacy filename from the superseded 8% maximum-height rule. This is
         # a user-confirmed block silhouette and must remain accepted.
         ("unsupported-west-too-tall-2.png", "左岸"),
@@ -257,6 +304,16 @@ def test_other_peninsula_silhouettes_are_rejected(name: str) -> None:
     assert "指定浮岛" in result["summary"]
 
 
+def test_audit_1788101808190_rounded_corner_nub_is_rejected() -> None:
+    image = cv2.imread(str(PENINSULA_FIXTURES / "unsupported-west-rounded-corner-nub.png"))
+    assert image is not None
+
+    result = factor(analyze_map(image), "peninsula")
+
+    assert result["passed"] is False
+    assert "未匹配指定浮岛" in result["summary"]
+
+
 def test_beach_shape_ignores_unrelated_structure_below_the_coast() -> None:
     sand = np.zeros((144, 192), dtype=np.uint8)
     for x in range(16, 176):
@@ -289,6 +346,34 @@ def test_fragmented_coastal_rocks_are_a_hard_rejection() -> None:
     assert "碎礁" in factor(result, "coastalRocks")["summary"]
 
 
+def test_one_complete_large_reef_is_preferred_but_fragments_still_reject() -> None:
+    single = factor(analyze_map(candidate_map(single_large_rock=True)), "coastalRocks")
+    pair = factor(analyze_map(candidate_map()), "coastalRocks")
+    fragmented = factor(
+        analyze_map(candidate_map(single_large_rock=True, fragmented_rock=True)),
+        "coastalRocks",
+    )
+
+    assert single["passed"] is True
+    assert single["score"] == pytest.approx(1.0)
+    assert single["score"] > pair["score"]
+    assert single["summary"].startswith("1 块完整大礁石（单块优先） · 无碎礁")
+    assert pair["passed"] is True
+    assert fragmented["passed"] is False
+    assert "碎礁" in fragmented["summary"]
+
+
+def test_supplied_single_large_reef_map_is_accepted_and_preferred() -> None:
+    image = cv2.imread(str(SINGLE_LARGE_REEF_FIXTURE))
+    assert image is not None
+
+    rocks = factor(analyze_map(image), "coastalRocks")
+
+    assert rocks["passed"] is True
+    assert rocks["score"] == pytest.approx(1.0)
+    assert rocks["summary"].startswith("1 块完整大礁石（单块优先） · 无碎礁")
+
+
 def test_fixed_north_and_river_mouth_rocks_do_not_count_as_fragments() -> None:
     plain = analyze_map(candidate_map())
     decorated = analyze_map(candidate_map(fixed_rock_decorations=True))
@@ -318,7 +403,7 @@ def test_large_reef_budget_can_leave_one_small_but_complete_opposite_reef() -> N
     rocks = factor(analyze_map(image), "coastalRocks")
 
     assert rocks["passed"] is True
-    assert rocks["score"] == pytest.approx(1.0)
+    assert rocks["score"] < factor(analyze_map(cv2.imread(str(SINGLE_LARGE_REEF_FIXTURE))), "coastalRocks")["score"]
     assert rocks["summary"].startswith("2 块完整大礁石（左大右小，总量合格） · 无碎礁")
     # Two small ovals alone still do not satisfy the shared material budget.
     assert _large_rock_count(_fixture("small-reefs-only.jpg")) == 0
@@ -450,43 +535,75 @@ def test_supplied_reference_map_passes_the_coherent_airport_plaza_rule() -> None
     airport_plaza = factor(result, "airportPlaza")
 
     assert airport_plaza["passed"] is True
-    assert "机场出口距中线 6.6%" in airport_plaza["summary"]
+    assert "机场本体右偏 2.0%" in airport_plaza["summary"]
+    assert "机场出口距中线 7.4%" in airport_plaza["summary"]
     assert "广场距中线 7.1%" in airport_plaza["summary"]
-    assert "出口横向错位 0.5%" in airport_plaza["summary"]
+    assert "出口横向错位 0.3%" in airport_plaza["summary"]
     assert "共同偏移但轴线一致" in airport_plaza["summary"]
-    # The current peninsula whitelist is intentionally independent: this older
-    # reference has a small side bump, so the full map no longer hard-passes.
-    assert factor(result, "peninsula")["passed"] is False
-    assert result["hardPass"] is False
+    # The same map also carries the user-confirmed west exterior-area shape.
+    # It used to be reduced to a short row run; the connected-area model must
+    # now keep and accept the complete silhouette.
+    assert factor(result, "peninsula")["passed"] is True
+    assert "外形面积 0.51%" in factor(result, "peninsula")["summary"]
+    assert result["hardPass"] is True
+    assert result["score"] >= 0.83
 
 
 def test_airport_plaza_mutual_horizontal_offset_is_limited_to_two_percent() -> None:
-    within_limit = factor(analyze_map(candidate_map(airport_x=266)), "airportPlaza")
-    excessive = factor(analyze_map(candidate_map(airport_x=269)), "airportPlaza")
+    within_limit = factor(analyze_map(candidate_map(airport_x=270)), "airportPlaza")
+    excessive = factor(analyze_map(candidate_map(airport_x=271)), "airportPlaza")
 
     assert within_limit["passed"] is True
     assert excessive["passed"] is False
     assert "出口与广场错位（上限 2.0%）" in excessive["summary"]
 
 
-def test_airport_distance_rejects_layouts_that_are_too_far_or_too_close() -> None:
-    moderate = analyze_map(candidate_map(airport_x=258))
-    too_far = analyze_map(candidate_map(airport_x=258, plaza_y=180))
-    too_close = analyze_map(candidate_map(airport_x=258, airport_y=270))
+def test_airport_distance_requires_20_percent_separation_and_has_no_too_far_rejection() -> None:
+    too_close = analyze_map(candidate_map(airport_x=258, plaza_y=246))
+    long_enough = analyze_map(candidate_map(airport_x=258, plaza_y=244))
+    farther = analyze_map(candidate_map(airport_x=258, plaza_y=120))
 
-    assert factor(moderate, "airportPlaza")["passed"] is True
-    assert factor(too_far, "airportPlaza")["passed"] is False
-    assert "过远" in factor(too_far, "airportPlaza")["summary"]
     assert factor(too_close, "airportPlaza")["passed"] is False
-    assert "过近" in factor(too_close, "airportPlaza")["summary"]
+    assert "间距 19.7%（过近）" in factor(too_close, "airportPlaza")["summary"]
+    assert "间距过近（需 ≥20.0%）" in factor(too_close, "airportPlaza")["summary"]
+    assert factor(long_enough, "airportPlaza")["passed"] is True
+    assert "间距 20.3%（合格）" in factor(long_enough, "airportPlaza")["summary"]
+    assert factor(farther, "airportPlaza")["passed"] is True
+
+
+def test_audit_1788155968623_airport_plaza_distance_17_4_is_rejected() -> None:
+    image = cv2.imread(str(TOO_CLOSE_AIRPORT_PLAZA_FIXTURE))
+    assert image is not None
+
+    result = factor(analyze_map(image), "airportPlaza")
+
+    assert result["passed"] is False
+    assert "间距 17.5%（过近）" in result["summary"]
+    assert "间距过近（需 ≥20.0%）" in result["summary"]
+
+
+def test_audit_1788394985095_right_shift_aligns_the_airport_exit_with_plaza() -> None:
+    image = cv2.imread(str(RIGHT_OFFSET_EXIT_ALIGNED_FIXTURE))
+    assert image is not None
+
+    result = factor(analyze_map(image), "airportPlaza")
+
+    assert "机场本体右偏 2.3%" in result["summary"]
+    assert "出口横向错位 0.0%" in result["summary"]
+    assert "出口与广场错位" not in result["summary"]
+    assert "机场偏离中线" not in result["summary"]
+    assert "广场偏离中线" not in result["summary"]
+    assert result["passed"] is True
+    assert "间距 23.3%（合格）" in result["summary"]
 
 
 def test_airport_exit_alignment_accounts_for_its_left_offset() -> None:
     body_centered = analyze_map(candidate_map(airport_x=250))
-    exit_centered = analyze_map(candidate_map(airport_x=258))
+    exit_centered = analyze_map(candidate_map(airport_x=261))
 
     assert factor(exit_centered, "airportPlaza")["score"] > factor(body_centered, "airportPlaza")["score"]
-    assert "出口横向错位" in factor(exit_centered, "airportPlaza")["summary"]
+    assert "机场本体右偏 2.5%" in factor(exit_centered, "airportPlaza")["summary"]
+    assert "出口横向错位 0.2%" in factor(exit_centered, "airportPlaza")["summary"]
 
 
 def test_airport_selector_rejects_flat_bottom_edge_artifacts() -> None:

@@ -14,7 +14,7 @@ import cv2
 import numpy as np
 
 
-AUDIT_LIMIT = 20
+AUDIT_LIMIT = 100
 _AUDIT_ID = re.compile(r"^[0-9]{13}-[0-9a-f]{8}$")
 _SUMMARY_FIELDS = (
     "id",
