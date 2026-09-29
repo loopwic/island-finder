@@ -1,4 +1,5 @@
-import { access, chmod, copyFile, cp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, copyFile, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
@@ -8,6 +9,19 @@ const projectRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const resourcesRoot = path.join(projectRoot, 'apps/desktop/src-tauri/resources');
 const runtimeRoot = path.join(resourcesRoot, 'runtime');
 const executableName = process.platform === 'win32' ? 'uv.exe' : 'uv';
+
+async function verifyBundledFirmware(root) {
+  const directory = path.join(root, 'vision_service/firmware_assets');
+  const manifest = JSON.parse(await readFile(path.join(directory, 'manifest.json'), 'utf8'));
+  if (!/^PABotBase2-ESP32-S3-[A-Za-z0-9_.-]+\.bin$/.test(manifest.filename)) {
+    throw new Error('内置固件文件名无效');
+  }
+  const image = await readFile(path.join(directory, manifest.filename));
+  if (image.length !== manifest.size || createHash('sha256').update(image).digest('hex') !== manifest.sha256) {
+    throw new Error('内置固件校验失败，不能生成安装包');
+  }
+  await access(path.join(directory, 'UPSTREAM-README.md'));
+}
 
 async function findUv() {
   const candidates = [];
@@ -28,6 +42,7 @@ async function findUv() {
   throw new Error('未找到 uv；请先安装 uv，或设置 ISLAND_FINDER_UV_BIN');
 }
 
+await verifyBundledFirmware(projectRoot);
 await rm(resourcesRoot, { recursive: true, force: true });
 await mkdir(path.join(runtimeRoot, 'scripts'), { recursive: true });
 await mkdir(path.join(runtimeRoot, 'bin'), { recursive: true });
@@ -44,6 +59,7 @@ await cp(path.join(projectRoot, 'vision_service'), path.join(runtimeRoot, 'visio
     )) && !source.endsWith('.pyc');
   },
 });
+await verifyBundledFirmware(runtimeRoot);
 
 for (const source of [
   'scripts/capture-stream.swift',

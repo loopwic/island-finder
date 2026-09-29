@@ -21,7 +21,11 @@ Supervisor 在 macOS 与 Windows 上使用同一份 Python 实现，分别启动
 
 ### Web 控制台
 
-`src/` 使用 React、TanStack Router、HeroUI 和 Tailwind。它负责资料配置、设备选择、状态展示、审计查看和候选决策。地图框、页面锚点和地图评分不属于浏览器职责。
+`src/` 使用 React、TanStack Router、Astryx 中性主题、StyleX 和 Hugeicons。它负责资料配置、设备选择、状态展示、审计查看和候选决策。地图框、页面锚点和地图评分不属于浏览器职责。
+
+界面从外向内组合 Astryx 的 `AppShell`、`SideNav`、`Layout`、`List` 和 `FormLayout`，不在业务页复刻导航、表单、弹窗的基础行为。应用只保留一个主工作区外框；普通分组用 Stack、标题和间距组织，不用会向外扩展的 Section 抵消页面内边距。`src/app/` 持有应用壳、主题和常驻后端状态；`components/core/` 只放通用组合；`components/console/`、`audit/`、`settings/`、`firmware/` 分别拥有各业务区域；路由只负责区域组合。
+
+布局约定：桌面导航宽 224px；控制台工作区最大宽度 1120px，280px 辅助栏只展示配置摘要和连接状态，1100px 以下顺排。资料和目标在弹窗中编辑。设备设置最大宽度 800px，连接、识别参数、固件使用同级标签页。审计默认直接展示地图及判定依据，原始画面按需打开；记录与详情独立滚动，窄窗口顺排。弹窗固定标题与操作区，仅内容区滚动；640px 以下全屏。普通配置自动保存，失败由恢复弹窗提供重试，不在页面堆积保存状态。
 
 浏览器在开发环境连接 `127.0.0.1:48197`；生产界面由 Tauri 内嵌，源码/无头运行时的 FastAPI 后端也可直接提供 `apps/web/dist/`，不需要另起静态文件服务。
 

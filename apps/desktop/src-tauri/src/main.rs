@@ -1,6 +1,6 @@
 use std::{
     env, fs,
-    io::{self, Write},
+    io::{self, Read, Write},
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -17,6 +17,23 @@ use tauri::{Manager, RunEvent, WindowEvent};
 const CONTROLLER_PORT: u16 = 32_145;
 const VISION_PORT: u16 = 48_197;
 const RUNTIME_RESTART_LIMIT: usize = 3;
+
+fn firmware_in_progress() -> bool {
+    let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), VISION_PORT);
+    let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_millis(300)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(300)));
+    if stream.write_all(b"GET /v1/firmware/close-guard HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").is_err() {
+        return false;
+    }
+    let mut response = String::new();
+    let _ = stream.take(4096).read_to_string(&mut response);
+    response
+        .split_once("\r\n\r\n")
+        .is_some_and(|(_, body)| body.trim() == "busy")
+}
 
 #[derive(Clone)]
 struct RuntimeLaunch {
@@ -211,6 +228,12 @@ fn project_root(resource_dir: Option<&Path>) -> io::Result<(PathBuf, bool)> {
             .canonicalize()
             .map(|root| (root, false));
     }
+    // Development always runs the editable source, not a stale packaged copy.
+    if cfg!(debug_assertions)
+        && let Some(root) = find_project_root(Path::new(env!("CARGO_MANIFEST_DIR")))
+    {
+        return Ok((root, false));
+    }
     if let Some(root) = resource_dir
         .map(|resources| resources.join("runtime"))
         .as_deref()
@@ -321,6 +344,11 @@ fn main() {
     let app = tauri::Builder::default()
         .manage(runtime.clone())
         .setup(move |app| {
+            if cfg!(debug_assertions)
+                && let Some(window) = app.get_webview_window("main")
+            {
+                window.set_title("Island Finder — 开发模式")?;
+            }
             let launch = RuntimeLaunch {
                 resource_dir: Some(app.path().resource_dir()?),
                 app_data_dir: Some(app.path().app_data_dir()?),
@@ -335,13 +363,24 @@ fn main() {
 
     app.run(|app, event| match event {
         RunEvent::WindowEvent {
-            event: WindowEvent::CloseRequested { .. },
+            event: WindowEvent::CloseRequested { api, .. },
             ..
         } => {
+            if firmware_in_progress() {
+                api.prevent_close();
+                return;
+            }
             app.state::<RuntimeProcess>().shutdown();
             app.exit(0);
         }
-        RunEvent::ExitRequested { .. } | RunEvent::Exit => {
+        RunEvent::ExitRequested { api, .. } => {
+            if firmware_in_progress() {
+                api.prevent_exit();
+                return;
+            }
+            app.state::<RuntimeProcess>().shutdown();
+        }
+        RunEvent::Exit => {
             app.state::<RuntimeProcess>().shutdown();
         }
         _ => {}

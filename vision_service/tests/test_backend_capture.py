@@ -759,6 +759,8 @@ def _runtime_action_harness():
     runtime = BackendRuntime.__new__(BackendRuntime)
     runtime.instance_id = "current-instance"
     runtime._lock = threading.RLock()
+    runtime._action_lock = threading.RLock()
+    runtime.firmware = SimpleNamespace(busy=False)
     runtime._start_authorization = None
     runtime.engine = SimpleNamespace(
         start=lambda: calls.append("start"),
@@ -809,3 +811,12 @@ def test_emergency_stop_does_not_require_instance_token():
 
     assert runtime.action("stop") == {"ok": True}
     assert calls == ["stop"]
+
+
+def test_firmware_job_blocks_runtime_actions():
+    runtime, calls = _runtime_action_harness()
+    runtime.firmware.busy = True
+    for action in ("start", "resume", "accept", "reject", "controller-connect"):
+        with pytest.raises(ValueError, match="固件烧录中"):
+            runtime.action(action)
+    assert calls == []

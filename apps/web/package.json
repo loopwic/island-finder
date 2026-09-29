@@ -11,20 +11,21 @@
     "preview": "vite preview ../.. --config ../../vite.config.ts --host 127.0.0.1 --port 4173"
   },
   "dependencies": {
-    "@heroui/react": "3.2.4",
-    "@heroui/styles": "3.2.4",
+    "@astryxdesign/core": "0.5.2",
+    "@astryxdesign/theme-neutral": "0.5.2",
+    "@hugeicons/core-free-icons": "4.3.0",
+    "@hugeicons/react": "1.1.10",
+    "@stylexjs/stylex": "0.19.0",
     "@tanstack/react-router": "1.170.32",
     "@tauri-apps/api": "2.11.1",
-    "lucide-react": "1.33.0",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "4.3.3",
+    "@stylexjs/unplugin": "0.19.0",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",
     "@vitejs/plugin-react": "6.1.0",
-    "tailwindcss": "4.3.3",
     "typescript": "7.0.2",
     "vite": "8.2.2",
     "vitest": "4.1.11"

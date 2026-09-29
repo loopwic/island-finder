@@ -102,7 +102,20 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
         try:
-            if path == "/v1/pairing/start":
+            if path in {"/v1/maintenance/start", "/v1/maintenance/stop"}:
+                # Backend-to-controller only. Browsers cannot supply this header
+                # without a preflight, and it is not in our CORS allow-list.
+                if self.headers.get("Origin") or self.headers.get("X-Island-Firmware-Internal") != "1":
+                    raise ControllerError("固件维护仅允许本机后端调用", status=403)
+                owner = self._read_json().get("owner")
+                if not isinstance(owner, str) or len(owner) != 32 or not all(c in "0123456789abcdef" for c in owner):
+                    raise ControllerError("固件维护会话无效", status=400)
+                if path.endswith("/start"):
+                    self.bridge.begin_maintenance(owner)
+                else:
+                    self.bridge.end_maintenance(owner)
+                payload = {"ok": True}
+            elif path == "/v1/pairing/start":
                 self.bridge.start()
                 payload = self.bridge.status()
             elif path == "/v1/pairing/stop":

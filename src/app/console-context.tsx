@@ -21,6 +21,8 @@ type ConsoleContextValue = {
   controller: BackendState['controller'];
   logs: BackendState['logs'];
   notice: string | null;
+  dismissNotice: () => void;
+  retrySettings: () => Promise<void>;
   connectionStatus: BackendConnectionStatus;
   connectionError: string | null;
   active: boolean;
@@ -226,11 +228,6 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
     reconnectStateStream.current?.();
   };
 
-  useEffect(() => {
-    if (!notice) return;
-    const timeout = window.setTimeout(() => setNotice(null), 3_500);
-    return () => window.clearTimeout(timeout);
-  }, [notice]);
 
   useEffect(() => {
     if (!settingsLoaded || !settingsDirty.current) return;
@@ -348,7 +345,6 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       const references = await Promise.all([...files].map(referenceFromFile));
       if (!markSettingsDirty()) return;
       setSettings((current) => ({ ...current, targets: [...current.targets, ...references] }));
-      setNotice(`已添加 ${references.length} 张辅助地图样例`);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : String(error));
     }
@@ -360,6 +356,25 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       ...current,
       targets: current.targets.filter((target) => target.id !== id),
     }));
+  };
+
+  const retrySettings = async () => {
+    setNotice(null);
+    if (!settingsLoaded) { await reconnect(); return; }
+    if (saveTimer.current !== null) { window.clearTimeout(saveTimer.current); saveTimer.current = null; }
+    const editRevision = settingsEditRevision.current;
+    setSettingsSyncState('saving');
+    try {
+      const saved = await backend.saveSettings(settings);
+      if (editRevision === settingsEditRevision.current) {
+        settingsDirty.current = false;
+        setSettings(saved);
+        setSettingsSyncState('saved');
+      }
+    } catch (error) {
+      setSettingsSyncState('error');
+      setNotice(error instanceof Error ? error.message : String(error));
+    }
   };
 
   const clearLogs = async () => {
@@ -389,7 +404,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   const logs = state?.logs ?? [];
   const active = !['idle', 'paused', 'error'].includes(runtime.phase);
   const identityReady = settingsLoaded && isIdentityReady(settings.identity);
-  const ready = settingsLoaded && capture.connected && identityReady && (settings.dryRun || controller.connected);
+  const ready = settingsLoaded && !state?.firmware?.busy && capture.connected && identityReady && (settings.dryRun || controller.connected);
 
   return (
     <ConsoleContext.Provider value={{
@@ -402,6 +417,8 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       controller,
       logs,
       notice,
+      dismissNotice: () => setNotice(null),
+      retrySettings,
       connectionStatus,
       connectionError,
       active,

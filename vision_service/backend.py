@@ -25,6 +25,7 @@ from analyzer import analysis_input_sha256, analyze_map
 from audit_store import SelectionAuditStore
 from birthday_ocr import recognize_birthday
 from candidate_ocr import recognize_keyboard_frame
+from firmware_service import FirmwareService
 from input_planner import (
     RESTART_COMMANDS,
     commands_for_birthday,
@@ -338,7 +339,10 @@ class ControllerClient:
             CONTROLLER_URL + path,
             method=method,
             data=data,
-            headers={"Content-Type": "application/json"} if data is not None else {},
+            headers={
+                **({"Content-Type": "application/json"} if data is not None else {}),
+                **({"X-Island-Firmware-Internal": "1"} if path.startswith("/v1/maintenance/") else {}),
+            },
         )
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -2230,10 +2234,17 @@ class BackendRuntime:
                 )
         self._lock = threading.RLock()
         self._start_authorization: tuple[str, float] | None = None
+        self._action_lock = threading.RLock()
         self._logs: deque[dict[str, Any]] = deque(maxlen=200)
         self._next_log_id = 1
         self._snapshot = copy.deepcopy(INITIAL_RUNTIME)
         self.controller = ControllerClient(self._controller_event)
+        self.firmware = FirmwareService(
+            self.store.data_dir,
+            lambda action, owner: self.controller._request(
+                f"/v1/maintenance/{action}", method="POST", body={"owner": owner}, timeout=8.0,
+            ),
+        )
         self.capture = CaptureManager(self.store.get, self._capture_event)
         self.audits = SelectionAuditStore(self.store.data_dir)
         self.engine = AutomationEngine(
@@ -2252,6 +2263,7 @@ class BackendRuntime:
             threading.Thread(target=self._delayed_start, name="automation-autostart", daemon=True).start()
 
     def shutdown(self) -> None:
+        self.firmware.shutdown()
         self.engine.shutdown()
         self.capture.stop()
 
@@ -2261,7 +2273,10 @@ class BackendRuntime:
         last_error: Exception | None = None
         while time.monotonic() < deadline and self.store.get().get("autoConnectController", True):
             try:
-                self.controller.start_pairing()
+                with self._action_lock:
+                    if self.firmware.busy:
+                        return
+                    self.controller.start_pairing()
                 return
             except Exception as error:  # noqa: BLE001
                 last_error = error
@@ -2277,7 +2292,10 @@ class BackendRuntime:
             controller_ready = settings["dryRun"] or self.controller.connected
             if capture_ready and controller_ready:
                 try:
-                    self.engine.start()
+                    with self._action_lock:
+                        if self.firmware.busy:
+                            return
+                        self.engine.start()
                 except Exception as error:  # noqa: BLE001
                     self.add_log("error", f"后端自动启动失败：{error}")
                 return
@@ -2316,6 +2334,7 @@ class BackendRuntime:
             "controller": self.controller.status(),
             "settings": self.store.get(),
             "logs": logs,
+            "firmware": self.firmware.status(),
         }
 
     def capture_devices(self) -> dict[str, Any]:
@@ -2388,6 +2407,17 @@ class BackendRuntime:
         return {"startToken": token}
 
     def action(
+        self,
+        name: str,
+        instance_id: str | None = None,
+        start_token: str | None = None,
+    ) -> dict[str, Any]:
+        with self._action_lock:
+            if self.firmware.busy:
+                raise ValueError("固件烧录中，不能启动自动化或操作手柄，请等待任务结束")
+            return self._action(name, instance_id, start_token)
+
+    def _action(
         self,
         name: str,
         instance_id: str | None = None,

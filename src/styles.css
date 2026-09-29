@@ -1,2 +1,11 @@
-@import "tailwindcss";
-@import "@heroui/styles";
+@import '@astryxdesign/core/reset.css';
+@import '@astryxdesign/core/astryx.css';
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+body {
+  margin: 0;
+}

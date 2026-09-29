@@ -1,9 +1,17 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import tailwindcss from '@tailwindcss/vite';
+import stylex from '@stylexjs/unplugin/vite';
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    stylex({
+      classNamePrefix: 'island',
+      debug: false,
+      cssInjectionTarget: (fileName) => /(?:^|\/)index(?:-[^/]+)?\.css$/.test(fileName),
+      useCSSLayers: { after: ['astryx-theme'], before: ['reset', 'astryx-base'], prefix: 'stylex' },
+    }),
+    react(),
+  ],
   build: {
     outDir: 'apps/web/dist',
     emptyOutDir: true,

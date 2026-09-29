@@ -97,6 +97,7 @@ class PABotBase2Bridge:
         self._sleep = sleep
         self._serial: SerialLike | None = None
         self._lock = threading.RLock()
+        self._maintenance_owner: str | None = None
 
         self.port_path: str | None = None
         self.diagnostic = "尚未连接 PABotBase2 开发板"
@@ -146,10 +147,13 @@ class PABotBase2Bridge:
                 "diagnostic": self.diagnostic,
                 "transport": "pabotbase2",
                 "serialPort": self.port_path,
+                "maintenance": self._maintenance_owner is not None,
             }
 
     def start(self) -> None:
         with self._lock:
+            if self._maintenance_owner is not None:
+                raise ControllerError("固件维护中，暂时不能连接手柄")
             if self.ready_for_input:
                 return
             self._stop_without_sending()
@@ -202,6 +206,41 @@ class PABotBase2Bridge:
                     pass
             self._stop_without_sending()
             self.diagnostic = "PABotBase2 已停止并回到安全模式"
+
+    def begin_maintenance(self, owner: str) -> None:
+        with self._lock:
+            if self._maintenance_owner is not None:
+                if self._maintenance_owner == owner:
+                    return
+                raise ControllerError("另一个固件维护任务正在占用串口")
+            self.stop()
+            self._maintenance_owner = owner
+            self.diagnostic = "固件维护中；串口已交给烧录器，手柄输入已禁用"
+
+    def end_maintenance(self, owner: str) -> None:
+        with self._lock:
+            if self._maintenance_owner != owner:
+                raise ControllerError("固件维护会话不匹配")
+            self._maintenance_owner = None
+            self.diagnostic = "固件维护结束；请确认设备后手动启动配对"
+
+    def probe_firmware(self, port: str) -> bool:
+        """Confirm the serial protocol without changing mode or sending buttons."""
+        with self._lock:
+            if self._maintenance_owner is not None or self.active:
+                return False
+            for _attempt in range(3):
+                self._sleep(1.0)
+                try:
+                    self._open(port)
+                    self._begin_session()
+                    self._query_controller_mode()
+                    return True
+                except Exception:
+                    pass
+                finally:
+                    self._stop_without_sending()
+            return False
 
     def refresh(self) -> None:
         with self._lock:

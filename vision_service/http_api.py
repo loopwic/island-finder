@@ -18,6 +18,7 @@ from analyzer import analyze_map
 from backend import BackendRuntime
 from birthday_ocr import recognize_birthday
 from candidate_ocr import recognize_keyboard_frame
+from firmware_api import install_firmware_routes
 from screen_classifier import classify_screen
 
 
@@ -187,6 +188,7 @@ def create_app(runtime: BackendRuntime) -> FastAPI:
             "X-Island-Finder-Start-Token",
         ],
     )
+    install_firmware_routes(app, runtime, LOCAL_ORIGINS)
 
     @app.middleware("http")
     async def no_store(request: Request, call_next: Any) -> Response:

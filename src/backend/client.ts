@@ -69,7 +69,45 @@ export type BackendState = {
   controller: BackendControllerState;
   settings: FinderSettings;
   logs: RuntimeLog[];
+  firmware?: FirmwareStatus;
 };
+
+export type FirmwareImage = {
+  filename: string;
+  size: number;
+  sha256: string;
+  chip: string;
+  project: string;
+  version: string;
+  flashOffset: string;
+  source: 'bundled' | 'custom';
+  release?: string;
+  sourceUrl?: string;
+};
+
+export type FirmwareStatus = {
+  busy: boolean;
+  stage: string;
+  message: string;
+  jobId?: string;
+  port?: string;
+  startedAt?: number;
+  backupPath?: string | null;
+  backupSha256?: string;
+  backupRequested?: boolean;
+  baud?: number;
+  bytesRead?: number;
+  totalBytes?: number;
+  percent?: number;
+  bytesPerSecond?: number;
+  estimatedSeconds?: number;
+  logs: string[];
+  image: FirmwareImage | null;
+  bundledError?: string | null;
+};
+
+export type FirmwarePort = { path: string; description: string; identity: string };
+export type FirmwareConfirmation = { confirmationToken: string; port: string; image: FirmwareImage };
 
 export type BackendStateStreamMessage = {
   type: 'state' | 'heartbeat';
@@ -178,6 +216,30 @@ async function request<T>(path: string, init?: RequestInit, timeoutMs = 8_000): 
 }
 
 export const backend = {
+  firmwareStatus: () => request<FirmwareStatus>('/v1/firmware/status'),
+  firmwareUseBundled: (instanceId: string) => request<FirmwareImage>('/v1/firmware/bundled', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Island-Finder-Instance': instanceId },
+    body: '{}',
+  }),
+  firmwarePorts: (instanceId: string) => request<{ ports: FirmwarePort[] }>('/v1/firmware/ports', {
+    headers: { 'X-Island-Finder-Instance': instanceId },
+  }),
+  firmwareUpload: (file: File, instanceId: string) => request<FirmwareImage>(`/v1/firmware/image?filename=${encodeURIComponent(file.name)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream', 'X-Island-Finder-Instance': instanceId },
+    body: file,
+  }, 30_000),
+  firmwarePrepare: (port: string, instanceId: string) => request<FirmwareConfirmation>('/v1/firmware/prepare', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Island-Finder-Instance': instanceId },
+    body: JSON.stringify({ port }),
+  }),
+  firmwareFlash: (confirmationToken: string, baud: number, instanceId: string, backupRequested: boolean) => request<FirmwareStatus>('/v1/firmware/flash', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Island-Finder-Instance': instanceId },
+    body: JSON.stringify({ confirmationToken, baud, acknowledged: true, backupRequested }),
+  }),
   state: () => request<BackendState>('/v1/state', undefined, 2_500),
   openStateStream: () => new WebSocket(BACKEND_STATE_STREAM_URL),
   captureDevices: () => request<CaptureDevicesResponse>('/v1/capture-devices'),

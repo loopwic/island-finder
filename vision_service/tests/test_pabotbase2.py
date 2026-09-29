@@ -147,6 +147,16 @@ def test_cross_platform_http_contract_exposes_status_and_validates_press() -> No
             urllib.request.urlopen(request, timeout=2)
         assert captured.value.code == 409
         assert "尚未进入 NS2" in json.loads(captured.value.read())["error"]
+
+        for headers in ({}, {"Origin": "https://example.com", "X-Island-Firmware-Internal": "1"}):
+            maintenance = urllib.request.Request(
+                f"{base_url}/v1/maintenance/start", method="POST",
+                data=json.dumps({"owner": "a" * 32}).encode(), headers=headers,
+            )
+            with pytest.raises(urllib.error.HTTPError) as denied:
+                urllib.request.urlopen(maintenance, timeout=2)
+            assert denied.value.code == 403
+        assert bridge.status()["maintenance"] is False
     finally:
         server.shutdown()
         server.server_close()

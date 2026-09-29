@@ -1,0 +1,9 @@
+{
+  "filename": "PABotBase2-ESP32-S3-2026090200.bin",
+  "release": "2026090200",
+  "size": 324976,
+  "sha256": "15ffc4155e7c93d420c06a86abb161c25199397dd7b76ef052c19daa99cdcd79",
+  "sourceUrl": "https://github.com/PokemonAutomation/Packages/blob/641ba20b00dadc06e1990cf25dd9a7054b85e28c/Firmware/PABotBase2-ESP32-S3-2026090200.bin",
+  "upstreamCommit": "641ba20b00dadc06e1990cf25dd9a7054b85e28c",
+  "license": "Free for non-commercial use only; see UPSTREAM-README.md"
+}

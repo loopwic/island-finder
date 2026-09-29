@@ -10,6 +10,9 @@ import {
 import { ConsoleProvider } from './app/console-context';
 import { AppErrorBoundary } from './app/app-error-boundary';
 import { RootLayout } from './app/root-layout';
+import { AppTheme } from './app/theme';
+import { InternationalizationProvider } from '@astryxdesign/core/i18n';
+import zhCN from '@astryxdesign/core/locales/zh-CN.json';
 import './styles.css';
 
 const rootRoute = createRootRoute({
@@ -60,10 +63,14 @@ function DesktopReloadBoundary({ children }: { children: ReactNode }) {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <DesktopReloadBoundary>
-      <AppErrorBoundary>
-        <RouterProvider router={router} />
-      </AppErrorBoundary>
-    </DesktopReloadBoundary>
+    <AppTheme>
+      <InternationalizationProvider locale="zh-CN" messages={{ 'zh-CN': zhCN }}>
+        <DesktopReloadBoundary>
+          <AppErrorBoundary>
+            <RouterProvider router={router} />
+          </AppErrorBoundary>
+        </DesktopReloadBoundary>
+      </InternationalizationProvider>
+    </AppTheme>
   </StrictMode>,
 );
