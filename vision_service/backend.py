@@ -304,6 +304,37 @@ class OperationCancelled(Exception):
     pass
 
 
+# Display names for log and status text; the frontend keeps the same table.
+SCREEN_LABELS = {
+    "noSignal": "无信号",
+    "loading": "加载中",
+    "nameKeyboard": "名字键盘",
+    "birthdayPicker": "生日选择",
+    "styleChoice": "初始造型",
+    "appearanceEditor": "形象编辑",
+    "choiceDialog": "选项确认",
+    "mapSelection": "四岛地图",
+    "homeMenu": "Switch 主界面",
+    "accountPicker": "游玩账号",
+    "dialogue": "对话",
+    "startupPrompt": "启动提示",
+    "unknown": "未识别页面",
+}
+
+
+def screen_label(kind: str) -> str:
+    return SCREEN_LABELS.get(kind, kind)
+
+
+def describe_controller_error(error: Exception) -> str:
+    reason = getattr(error, "reason", error)
+    if isinstance(reason, ConnectionRefusedError):
+        return "本地手柄服务未运行"
+    if isinstance(reason, TimeoutError):
+        return "本地手柄服务响应超时"
+    return f"本地手柄服务未响应：{reason}"
+
+
 class RestartRequired(RuntimeError):
     """The current game run is unsafe to continue but the service can recover."""
 
@@ -314,6 +345,7 @@ class ControllerClient:
         self._lock = threading.RLock()
         self._operation: threading.Event | None = None
         self._dry_run = True
+        self._cancel_check: Callable[[], None] = lambda: None
         self._status: dict[str, Any] = {
             "active": False,
             "connected": False,
@@ -332,6 +364,14 @@ class ControllerClient:
 
     def set_dry_run(self, value: bool) -> None:
         self._dry_run = value
+
+    def set_cancel_check(self, check: Callable[[], None]) -> None:
+        """Install a hook that raises OperationCancelled for stale callers.
+
+        ``cancel()`` only interrupts the operation in flight; the hook stops a
+        cancelled automation thread from starting new presses afterwards.
+        """
+        self._cancel_check = check
 
     def _request(self, path: str, method: str = "GET", body: dict[str, Any] | None = None, timeout: float = 3.0) -> dict[str, Any]:
         data = None if body is None else json.dumps(body).encode("utf-8")
@@ -371,7 +411,7 @@ class ControllerClient:
             next_status = {
                 "active": False,
                 "connected": False,
-                "message": f"本地手柄服务未响应：{error}",
+                "message": describe_controller_error(error),
                 "transport": None,
             }
         with self._lock:
@@ -389,6 +429,7 @@ class ControllerClient:
         """Restore the local controller link before starting a safe sequence."""
         last_error: Exception | None = None
         for attempt in range(max(1, attempts)):
+            self._cancel_check()
             status = self.refresh()
             if status["connected"]:
                 return status
@@ -427,8 +468,8 @@ class ControllerClient:
         except Exception:  # noqa: BLE001
             pass
 
-    @staticmethod
-    def _sleep(seconds: float, cancelled: threading.Event) -> None:
+    def _sleep(self, seconds: float, cancelled: threading.Event) -> None:
+        self._cancel_check()
         if cancelled.wait(max(0.0, seconds)):
             raise OperationCancelled()
 
@@ -436,6 +477,9 @@ class ControllerClient:
         self.run([press(button, hold_ms, after_ms)])
 
     def run(self, commands: list[dict[str, Any]]) -> None:
+        # Checked before touching the shared operation so a stale caller cannot
+        # cancel the operation of the generation that replaced it.
+        self._cancel_check()
         cancelled = threading.Event()
         with self._lock:
             previous = self._operation
@@ -454,6 +498,7 @@ class ControllerClient:
                 except Exception as error:  # noqa: BLE001
                     raise RestartRequired(str(error)) from error
             for command in commands:
+                self._cancel_check()
                 if cancelled.is_set():
                     raise OperationCancelled()
                 if not self._dry_run:
@@ -1070,6 +1115,14 @@ class AutomationEngine:
         self.advance_watch_presses = 0
         self.unrecognized_since: float | None = None
         self.active_audit_id: str | None = None
+        # Each automation thread (spawned actions and the observation loop)
+        # carries the token that was current when it started. Pause, stop and
+        # start set that token, so the stale thread stops at its next press,
+        # wait or state patch instead of driving the game after the user left.
+        self._action_context = threading.local()
+        self._action_token = threading.Event()
+        self._paused_from: str | None = None
+        controller.set_cancel_check(self._check_cancelled)
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, name="automation-engine", daemon=True)
 
@@ -1085,8 +1138,30 @@ class AutomationEngine:
         with self._lock:
             return copy.deepcopy(self.snapshot)
 
+    def _check_cancelled(self) -> None:
+        token = getattr(self._action_context, "token", None)
+        if token is not None and token.is_set():
+            raise OperationCancelled()
+
+    def _wait(self, seconds: float) -> None:
+        """Sleep in an automation thread, waking early when it is cancelled."""
+        token = getattr(self._action_context, "token", None)
+        if token is None:
+            time.sleep(max(0.0, seconds))
+            return
+        if token.wait(max(0.0, seconds)):
+            raise OperationCancelled()
+
+    def _cancel_actions(self) -> None:
+        with self._lock:
+            self._action_token.set()
+            self._action_token = threading.Event()
+            self.generation += 1
+            self.busy = False
+
     def _patch(self, **patch: Any) -> None:
         with self._lock:
+            self._check_cancelled()
             self.snapshot.update(copy.deepcopy(patch))
             snapshot = copy.deepcopy(self.snapshot)
         self.on_snapshot(snapshot)
@@ -1207,7 +1282,7 @@ class AutomationEngine:
 
         if exhausted is not None:
             reason = (
-                f"{exhausted['label']}后页面仍停留在 {screen_kind}；"
+                f"{exhausted['label']}后页面仍停留在{screen_label(screen_kind)}；"
                 f"已完成 {TRANSITION_RETRY_LIMIT} 轮重试，放弃本轮"
             )
             self._spawn(lambda: self._restart(reason))
@@ -1221,7 +1296,7 @@ class AutomationEngine:
         )
         self._log(
             "warning",
-            f"{label}后仍识别为 {screen_kind}，执行第 {retry_count}/{TRANSITION_RETRY_LIMIT} 轮重试",
+            f"{label}后仍识别为{screen_label(screen_kind)}，执行第 {retry_count}/{TRANSITION_RETRY_LIMIT} 轮重试",
         )
         self._spawn(
             lambda: self.controller.press(
@@ -1268,6 +1343,7 @@ class AutomationEngine:
         return ready, completeness, delta, self.map_stable_comparisons
 
     def _update_active_audit(self, **patch: Any) -> dict[str, Any] | None:
+        self._check_cancelled()
         audit_id = self.active_audit_id
         if audit_id is None:
             return None
@@ -1275,18 +1351,25 @@ class AutomationEngine:
 
     def _spawn(self, action: Callable[[], None]) -> bool:
         with self._lock:
+            # An observation pass that was cancelled mid-frame must not start
+            # an action under the token of the generation that replaced it.
+            self._check_cancelled()
             if self.busy:
                 return False
             self.busy = True
             self.generation += 1
             generation = self.generation
+            token = self._action_token
 
         def run() -> None:
+            self._action_context.token = token
             try:
                 action()
             except OperationCancelled:
                 pass
             except RestartRequired as error:
+                if token.is_set():
+                    return
                 try:
                     self._restart_after_unsafe_state(error)
                 except OperationCancelled:
@@ -1314,6 +1397,7 @@ class AutomationEngine:
                 self.controller.start_pairing()
             if not self.controller.connected:
                 raise RuntimeError("真实控制模式下必须先完成模拟手柄与 Switch 2 的配对")
+        self._cancel_actions()
         self.controller.cancel()
         with self._lock:
             self._update_active_audit(
@@ -1321,8 +1405,7 @@ class AutomationEngine:
                 summary="用户启动了新一轮，上一轮审计已结束",
                 decision="启动新一轮",
             )
-            self.busy = False
-            self.generation += 1
+            self._paused_from = None
             self._reset_guards()
         self._patch(
             phase="fastForwarding" if settings["dryRun"] else "restarting",
@@ -1344,25 +1427,49 @@ class AutomationEngine:
             self._spawn(self._start_fresh_game)
 
     def pause(self, message: str = "已暂停") -> None:
-        with self._lock:
-            self.generation += 1
-            self.busy = False
+        phase = self.state()["phase"]
+        self._cancel_actions()
         self.controller.cancel()
+        with self._lock:
+            if phase != "paused":
+                self._paused_from = phase
         self._update_active_audit(status="paused", summary=message)
         self._patch(phase="paused", lastMessage=message)
         self._log("warning", message)
 
     def resume(self) -> None:
-        if self.state()["phase"] != "paused":
+        state = self.state()
+        if state["phase"] != "paused":
+            return
+        with self._lock:
+            paused_from = self._paused_from
+            self._paused_from = None
+            # Timers and confirmations from before the pause describe frames
+            # the user may have changed since; observe from scratch.
+            self.stable_screen_kind = "unknown"
+            self.stable_screen_hits = 0
+            self.stable_key = ""
+            self.reject_stable_key = ""
+            self.reject_stable_hits = 0
+            self.reject_miss_hits = 0
+            self.transition_retry = None
+            self.unrecognized_since = None
+            self._reset_map_stability()
+            self._reset_advance_watch()
+        if paused_from == "awaitingDecision" and state.get("selectedCandidate"):
+            # The cursor already rests on the candidate; presenting it again
+            # would move it relative to the wrong card.
+            self._patch(phase="awaitingDecision", lastMessage="候选岛仍在等待你决定")
+            self._log("info", "已恢复候选岛确认")
             return
         self._patch(phase="fastForwarding", lastMessage="继续自动识别")
         self._log("info", "自动选岛已继续")
 
     def stop(self) -> None:
-        with self._lock:
-            self.generation += 1
-            self.busy = False
+        self._cancel_actions()
         self.controller.cancel()
+        with self._lock:
+            self._paused_from = None
         self._update_active_audit(
             status="stopped",
             summary="用户停止了自动选岛",
@@ -1407,12 +1514,16 @@ class AutomationEngine:
         )
         self.controller.press("A", 80, 250)
         self.active_audit_id = None
-        self._patch(phase="paused", lastMessage="已确认该岛，控制权已交还给用户")
+        # Idle rather than paused: there is nothing left to resume, and
+        # resuming would drive a game the user has taken over.
+        self._patch(phase="idle", lastMessage="已确认该岛，控制权已交还给用户")
         self._log("success", "用户选择保留候选岛；自动化已停止发送按键")
 
     def _loop(self) -> None:
         next_controller_poll = 0.0
         while not self._stop.is_set():
+            with self._lock:
+                self._action_context.token = self._action_token
             current = time.monotonic()
             if current >= next_controller_poll:
                 self.controller.refresh()
@@ -1425,6 +1536,8 @@ class AutomationEngine:
                 if frame is not None:
                     try:
                         self._observe_frame(frame)
+                    except OperationCancelled:
+                        pass
                     except Exception as error:  # noqa: BLE001
                         self._fail(error)
             interval = max(0.25, int(self._settings()["scanIntervalMs"]) / 1000)
@@ -1574,7 +1687,7 @@ class AutomationEngine:
             return
         self.unrecognized_since = None
         if self.stable_screen_hits < 2:
-            self._patch(lastMessage=f"正在确认当前页面：{screen['kind']}")
+            self._patch(lastMessage=f"正在确认当前页面：{screen_label(screen['kind'])}")
             return
         if self._maybe_retry_transition(screen["kind"]):
             return
@@ -1606,7 +1719,7 @@ class AutomationEngine:
         if screen["kind"] in advance_kinds:
             if self._advance_page_stalled(screen["kind"], frame_signature):
                 reason = (
-                    f"{screen['kind']} 连续推进 {ADVANCE_STALL_PRESS_LIMIT} 次后"
+                    f"{screen_label(screen['kind'])}连续推进 {ADVANCE_STALL_PRESS_LIMIT} 次后"
                     "画面仍未变化，判定流程卡住"
                 )
                 self._log("warning", reason)
@@ -1727,7 +1840,11 @@ class AutomationEngine:
             commands.append(press("DOWN", 60, 120))
         if index % 2 == 1:
             commands.append(press("RIGHT", 60, 120))
-        self.controller.run(commands)
+        try:
+            self.controller.run(commands)
+        except RestartRequired as error:
+            # Restarting would discard a qualifying island without asking.
+            raise RuntimeError(f"移动光标到候选岛时手柄链路中断，未重开游戏：{error}") from error
         self._patch(
             phase="awaitingDecision",
             lastMessage=f"发现候选岛：条件分 {float(candidate['score']) * 100:.1f}%",
@@ -1778,7 +1895,7 @@ class AutomationEngine:
                 except Exception as error:  # noqa: BLE001 - capture/OCR hiccups are retryable here
                     last_error = error
                     signature, hits = "", 0
-                    time.sleep(KEYBOARD_OCR_POLL_SECONDS)
+                    self._wait(KEYBOARD_OCR_POLL_SECONDS)
                     continue
                 if reject_phrases and latest["layout"] == "phrases":
                     raise RestartRequired("候选栏进入词语模式，无法安全选择单字")
@@ -1800,7 +1917,7 @@ class AutomationEngine:
                         return latest
                 else:
                     signature, hits = "", 0
-                time.sleep(KEYBOARD_OCR_POLL_SECONDS)
+                self._wait(KEYBOARD_OCR_POLL_SECONDS)
             if retry_round >= retry_limit:
                 break
             completed_retry = retry_round + 1
@@ -1815,7 +1932,7 @@ class AutomationEngine:
                 f"{failure_message}；只重试画面识别，不重复发送按键 "
                 f"({completed_retry}/{retry_limit})",
             )
-            time.sleep(RECOGNITION_RETRY_BASE_SECONDS * (1 + retry_round * 0.5))
+            self._wait(RECOGNITION_RETRY_BASE_SECONDS * (1 + retry_round * 0.5))
         observed = ""
         if latest:
             selected = latest.get("selectedIndex")
@@ -1994,7 +2111,7 @@ class AutomationEngine:
                 except Exception as error:  # noqa: BLE001 - capture/OCR hiccups are retryable
                     last_error = error
                     changed_signature, stable_hits = "", 0
-                    time.sleep(KEYBOARD_OCR_POLL_SECONDS)
+                    self._wait(KEYBOARD_OCR_POLL_SECONDS)
                     continue
                 if latest["layout"] == "phrases":
                     raise RestartRequired(
@@ -2010,14 +2127,14 @@ class AutomationEngine:
                         return latest
                 else:
                     changed_signature, stable_hits = "", 0
-                time.sleep(KEYBOARD_OCR_POLL_SECONDS)
+                self._wait(KEYBOARD_OCR_POLL_SECONDS)
             if retry_round < RECOGNITION_RETRY_LIMIT:
                 self._log(
                     "warning",
                     f"候选栏翻页画面尚未稳定；只重新采样，不重复按 R "
                     f"({retry_round + 1}/{RECOGNITION_RETRY_LIMIT})",
                 )
-                time.sleep(RECOGNITION_RETRY_BASE_SECONDS * (1 + retry_round * 0.5))
+                self._wait(RECOGNITION_RETRY_BASE_SECONDS * (1 + retry_round * 0.5))
         error_detail = f"；最近一次识别异常：{last_error}" if last_error else ""
         raise RestartRequired(
             f"候选栏按 R 后未可靠切换到下一页{error_detail}；"
@@ -2042,7 +2159,7 @@ class AutomationEngine:
                 stable_observation, stable_hits = observation, 1
             if stable_hits >= 2:
                 return latest if reliable else {**latest, "matched": False, "index": None}
-            time.sleep(KEYBOARD_OCR_POLL_SECONDS)
+            self._wait(KEYBOARD_OCR_POLL_SECONDS)
         if latest:
             return {**latest, "matched": False, "index": None}
         raise RestartRequired(f"OpenCV 未返回候选字“{character}”的识别结果")
@@ -2061,7 +2178,7 @@ class AutomationEngine:
         last_error: Exception | None = None
         for retry_round in range(retry_limit + 1):
             for _attempt in range(attempts):
-                time.sleep(0.16)
+                self._wait(0.16)
                 frame, _sequence = self.capture.latest()
                 if frame is None:
                     last_error = RuntimeError("采集卡画面尚未就绪")
@@ -2094,7 +2211,7 @@ class AutomationEngine:
                 f"生日识别尚未稳定；只重试画面识别，不重复发送按键 "
                 f"({completed_retry}/{retry_limit})",
             )
-            time.sleep(RECOGNITION_RETRY_BASE_SECONDS * (1 + retry_round * 0.5))
+            self._wait(RECOGNITION_RETRY_BASE_SECONDS * (1 + retry_round * 0.5))
         observed = (
             f"{latest['month']} 月 {latest['day']} 日"
             if latest and latest["month"] is not None and latest["day"] is not None
@@ -2157,6 +2274,7 @@ class AutomationEngine:
             self.controller.press("A", 220, 90)
 
     def _restart(self, reason: str, audit_status: str = "rejected") -> None:
+        self._check_cancelled()
         self.controller.cancel()
         self._update_active_audit(
             status=audit_status,
@@ -2183,12 +2301,20 @@ class AutomationEngine:
 
     def _fail(self, error: Exception) -> None:
         message = str(error)
-        self.controller.cancel()
         try:
-            self._update_active_audit(status="error", summary=message, decision="识别流程异常中止")
-        except Exception as audit_error:  # noqa: BLE001
-            message = f"{message}；同时无法回写审计状态：{audit_error}"
-        self._patch(phase="error", lastMessage=message)
+            # A cancelled thread's failure belongs to a run the user already
+            # ended; reporting it would overwrite the new state.
+            self._check_cancelled()
+            self.controller.cancel()
+            try:
+                self._update_active_audit(status="error", summary=message, decision="识别流程异常中止")
+            except OperationCancelled:
+                raise
+            except Exception as audit_error:  # noqa: BLE001
+                message = f"{message}；同时无法回写审计状态：{audit_error}"
+            self._patch(phase="error", lastMessage=message)
+        except OperationCancelled:
+            return
         self._log("error", message)
 
 
@@ -2359,17 +2485,38 @@ class BackendRuntime:
     def update_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
         before = self.store.get()
         payload = copy.deepcopy(payload)
+        if (
+            "dryRun" in payload
+            and bool(payload["dryRun"]) != bool(before["dryRun"])
+            and self.engine.state()["phase"] not in {"idle", "error"}
+        ):
+            # Switching mid-run would turn a rehearsal into real presses (or
+            # the reverse) without the restart and start token a run requires.
+            raise ValueError("自动选岛运行或暂停期间不能切换演练模式，请先停止")
         incoming_id = str(payload.get("captureDeviceId") or "").strip()
         incoming_name = str(payload.get("captureDeviceName") or "").strip()
-        devices = discover_capture_devices()
-        if incoming_id or incoming_name:
+        identity_changed = (
+            incoming_id != before.get("captureDeviceId", "")
+            or incoming_name != before.get("captureDeviceName", "")
+        )
+        index_changed = (
+            "captureDeviceIndex" in payload
+            and int(payload["captureDeviceIndex"]) != before["captureDeviceIndex"]
+        )
+        # Discovery shells out to system tools; autosaves of unrelated fields
+        # must neither wait for it nor fail while the card is unplugged.
+        devices = discover_capture_devices() if identity_changed or index_changed else []
+        if (incoming_id or incoming_name) and identity_changed:
             selected, error = resolve_capture_device(payload, devices)
             if selected is None:
                 raise ValueError(error or "已绑定的采集卡当前不在线")
             payload["captureDeviceIndex"] = selected["index"]
             payload["captureDeviceId"] = selected.get("id", "")
             payload["captureDeviceName"] = selected.get("name", "")
-        elif "captureDeviceIndex" in payload and int(payload["captureDeviceIndex"]) != before["captureDeviceIndex"]:
+        elif incoming_id or incoming_name:
+            # Same bound device: the backend owns its current OS index.
+            payload["captureDeviceIndex"] = before["captureDeviceIndex"]
+        elif index_changed:
             requested_index = int(payload["captureDeviceIndex"])
             selected = next(
                 (
@@ -2395,7 +2542,6 @@ class BackendRuntime:
         if any(before.get(key) != settings.get(key) for key in capture_keys):
             self.capture.reconfigure()
         self.controller.set_dry_run(bool(settings["dryRun"]))
-        self.add_log("success", "配置已保存到后端；关闭网页后仍然生效")
         return settings
 
     def arm_start(self, instance_id: str | None) -> dict[str, str]:

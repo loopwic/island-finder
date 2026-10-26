@@ -69,7 +69,7 @@ export function TargetPanel() {
       <div {...stylex.props(ui.tight, ui.scroll)}>
         {settings.targets.map((target) => (
           <div
-            {...stylex.props(ui.row, ui.padding, ui.divider)}
+            {...stylex.props(ui.row)}
             key={target.id}
           >
             <img {...stylex.props(ui.thumb)} src={target.previewUrl} alt="" />

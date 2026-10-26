@@ -7,6 +7,7 @@ import {
   type FirmwarePort,
   type FirmwareStatus,
 } from '../../backend/client';
+import { errorMessage } from '../../domain/errors';
 
 export function useFirmware() {
   const { state, runtime, connectionStatus } = useConsole();
@@ -69,7 +70,7 @@ export function useFirmware() {
     try {
       await task(isCurrent);
     } catch (reason) {
-      if (isCurrent()) setError(reason instanceof Error ? reason.message : String(reason));
+      if (isCurrent()) setError(errorMessage(reason));
     } finally {
       if (isCurrent()) setPending(false);
     }

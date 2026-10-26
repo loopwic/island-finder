@@ -59,9 +59,6 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.end_headers()
         self.wfile.write(body)
 
@@ -82,10 +79,24 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             raise ControllerError("JSON 请求体必须是对象", status=400)
         return payload
 
+    def _reject_browser(self) -> bool:
+        """Only the local backend calls this service; browsers send Origin.
+
+        Without this, any open web page could POST a plain-text press to the
+        controller and drive the Switch past every vision check.
+        """
+        if self.headers.get("Origin") is None:
+            return False
+        self._respond(HTTPStatus.FORBIDDEN, {"error": "控制器只接受本机后端调用"})
+        return True
+
     def do_OPTIONS(self) -> None:  # noqa: N802
-        self._respond(HTTPStatus.NO_CONTENT, {})
+        if not self._reject_browser():
+            self._respond(HTTPStatus.NO_CONTENT, {})
 
     def do_GET(self) -> None:  # noqa: N802
+        if self._reject_browser():
+            return
         if urlparse(self.path).path != "/v1/status":
             self._respond(HTTPStatus.NOT_FOUND, {"error": "接口不存在"})
             return
@@ -100,6 +111,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             )
 
     def do_POST(self) -> None:  # noqa: N802
+        if self._reject_browser():
+            return
         path = urlparse(self.path).path
         try:
             if path in {"/v1/maintenance/start", "/v1/maintenance/stop"}:

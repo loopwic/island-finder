@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type {
   RuntimePhase,
   RuntimeSnapshot,
@@ -56,9 +57,23 @@ export function calculateFlowProgress(
   };
   return progress[runtime.currentScreen] ?? 10;
 }
-export function formatElapsed(startedAt: number | null) {
+export function formatElapsed(startedAt: number | null, now = Date.now()) {
   const seconds = startedAt
-    ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000))
+    ? Math.max(0, Math.floor((now - startedAt) / 1000))
     : 0;
-  return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+  const hours = Math.floor(seconds / 3600);
+  const clock = `${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+  return hours ? `${hours}:${clock}` : clock;
+}
+
+/** Re-renders once per second while `enabled`, returning the current time. */
+export function useNow(enabled: boolean) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!enabled) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [enabled]);
+  return now;
 }

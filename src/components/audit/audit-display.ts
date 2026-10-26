@@ -1,19 +1,19 @@
-import type { TokenColor } from "@astryxdesign/core/Token";
 import type { AuditStatus } from "../../backend/client";
+import type { StatusTone } from "../core/status-label";
 
 export const auditLabels: Record<
   AuditStatus,
-  { label: string; color: TokenColor }
+  { label: string; tone: StatusTone }
 > = {
-  reviewing: { label: "判定中", color: "yellow" },
-  candidate: { label: "待确认", color: "green" },
-  accepted: { label: "已保留", color: "green" },
-  rejected: { label: "自动放弃", color: "default" },
-  userRejected: { label: "人工放弃", color: "default" },
-  paused: { label: "已暂停", color: "yellow" },
-  stopped: { label: "已停止", color: "default" },
-  superseded: { label: "已被新轮替代", color: "default" },
-  error: { label: "异常中止", color: "red" },
+  reviewing: { label: "判定中", tone: "running" },
+  candidate: { label: "待确认", tone: "warning" },
+  accepted: { label: "已保留", tone: "success" },
+  rejected: { label: "自动放弃", tone: "neutral" },
+  userRejected: { label: "人工放弃", tone: "neutral" },
+  paused: { label: "已暂停", tone: "warning" },
+  stopped: { label: "已停止", tone: "neutral" },
+  superseded: { label: "已被新轮替代", tone: "neutral" },
+  error: { label: "异常中止", tone: "error" },
 };
 export const runLabel = (run: number) =>
   run > 0 ? `第 ${run} 轮` : "实测补录";

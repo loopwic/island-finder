@@ -26,6 +26,9 @@ CALIBRATED_CARD_REGIONS: list[dict[str, float]] = [
     {"x": 0.5205, "y": 0.5685, "width": 0.2305, "height": 0.2525},
 ]
 
+# The in-game birthday picker offers February 29.
+DAYS_IN_MONTH = (31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "identity": {
@@ -102,7 +105,12 @@ def validate_settings(settings: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("姓名拼音必须是数组")
     identity["namePinyin"] = [str(item) for item in pinyin[:10]]
     identity["birthMonth"] = max(1, min(12, int(identity.get("birthMonth", 1))))
-    identity["birthDay"] = max(1, min(31, int(identity.get("birthDay", 1))))
+    # A day the picker cannot show (4/31, 2/30) would fail verification and
+    # restart every run, so clamp it to the month's length.
+    identity["birthDay"] = max(
+        1,
+        min(DAYS_IN_MONTH[identity["birthMonth"] - 1], int(identity.get("birthDay", 1))),
+    )
     if identity.get("initialStyle") not in {"left", "right"}:
         raise ValueError("初始造型必须是 left 或 right")
 
@@ -110,7 +118,10 @@ def validate_settings(settings: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(birthday_origin, dict):
         raise ValueError("生日初始游标配置无效")
     birthday_origin["month"] = max(1, min(12, int(birthday_origin.get("month", 1))))
-    birthday_origin["day"] = max(1, min(31, int(birthday_origin.get("day", 1))))
+    birthday_origin["day"] = max(
+        1,
+        min(DAYS_IN_MONTH[birthday_origin["month"] - 1], int(birthday_origin.get("day", 1))),
+    )
 
     settings["threshold"] = max(0.55, min(0.95, float(settings.get("threshold", 0.76))))
     settings["stableFrames"] = max(1, min(8, int(settings.get("stableFrames", 3))))

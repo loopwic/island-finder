@@ -11,6 +11,9 @@ import { type ReactNode } from "react";
 import { ui } from "./ui.stylex";
 import { dialogStyles } from "./dialog.stylex";
 
+// Figma 对话框/标准对话框: compact 480 for short forms, form 750 for wide content.
+const dialogWidths = { compact: "480px", form: "750px" } as const;
+
 export function StandardDialog({
   open,
   title,
@@ -18,6 +21,7 @@ export function StandardDialog({
   actions,
   onClose,
   locked = false,
+  size = "compact",
 }: {
   open: boolean;
   title: string;
@@ -25,6 +29,7 @@ export function StandardDialog({
   actions?: ReactNode;
   onClose: () => void;
   locked?: boolean;
+  size?: keyof typeof dialogWidths;
 }) {
   const narrow = useMediaQuery("(max-width: 640px)");
   const onOpenChange = (next: boolean) => {
@@ -36,12 +41,13 @@ export function StandardDialog({
       onOpenChange={onOpenChange}
       purpose={locked ? "required" : "form"}
       variant={narrow ? "fullscreen" : "standard"}
-      width={narrow ? "100%" : "38rem"}
+      width={narrow ? "100%" : `min(${dialogWidths[size]}, calc(100vw - 32px))`}
       maxHeight={narrow ? "100dvh" : "85dvh"}
-      padding={4}
+      padding={0}
       xstyle={ui.dialog}
     >
       <Layout
+        padding={0}
         header={
           <DialogHeader
             title={title}
@@ -51,14 +57,14 @@ export function StandardDialog({
           />
         }
         content={
-          <LayoutContent>
+          <LayoutContent padding={0} xstyle={dialogStyles.content}>
             <VStack gap={4}>{children}</VStack>
           </LayoutContent>
         }
         footer={
           actions ? (
-            <LayoutFooter padding={4} hasDivider>
-              <HStack hAlign="end" gap={2} wrap="wrap">
+            <LayoutFooter padding={0} xstyle={dialogStyles.footer}>
+              <HStack hAlign="end" vAlign="center" gap={2} wrap="wrap">
                 {actions}
               </HStack>
             </LayoutFooter>

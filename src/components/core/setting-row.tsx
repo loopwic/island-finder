@@ -19,9 +19,9 @@ export function SettingRow({
       role="group"
       aria-label={label}
     >
-      <VStack gap={1}>
-        <Text color="secondary">{label}</Text>
-        <Text size="sm" color="secondary">
+      <VStack gap={0.5}>
+        <Text>{label}</Text>
+        <Text type="supporting" color="secondary">
           {description}
         </Text>
       </VStack>

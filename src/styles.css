@@ -1,3 +1,8 @@
+/* Fix the cascade: app StyleX rules beat Astryx's base styles, and theme
+   component overrides beat both. Without this the order depends on which
+   stylesheet loads first. */
+@layer reset, astryx-base, stylex, astryx-theme;
+
 @import '@astryxdesign/core/reset.css';
 @import '@astryxdesign/core/astryx.css';
 

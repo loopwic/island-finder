@@ -1,21 +1,21 @@
 import { Button } from "@astryxdesign/core/Button";
-import { Banner } from "@astryxdesign/core/Banner";
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
 import { Switch } from "@astryxdesign/core/Switch";
 import { Selector } from "@astryxdesign/core/Selector";
 import { ProgressBar } from "@astryxdesign/core/ProgressBar";
 import { Text } from "@astryxdesign/core/Text";
-import { Token } from "@astryxdesign/core/Token";
+import { StatusLabel } from "../core/status-label";
 import { Collapsible } from "@astryxdesign/core/Collapsible";
 import { HStack, VStack } from "@astryxdesign/core/Layout";
 import { useRef } from "react";
 import * as stylex from "@stylexjs/stylex";
-import { Panel, Metric } from "../core/panel";
+import { MetricList } from "../core/panel";
 import { StandardDialog } from "../core/standard-dialog";
 import { AppIcon } from "../core/icons";
 import { ui } from "../core/ui.stylex";
 import { useFirmware } from "./use-firmware";
 import { SettingRow } from "../core/setting-row";
+import { Notice } from "../core/notice";
 
 const GUIDE =
   "https://pokemonautomation.github.io/SetupGuide/Controllers/Controller-ESP32-S3.html";
@@ -33,21 +33,12 @@ export function FirmwarePanel() {
       isLoading={f.pending}
       clickAction={f.recover}
     />
-  ) : (
-    <>
-      <Button label={f.busy ? "后台继续" : "关闭"} onClick={close} />
-      {!f.busy && (
-        <Button label="返回烧录设置" onClick={() => f.setStep("setup")} />
-      )}
-    </>
+  ) : f.busy ? undefined : (
+    <Button label="返回烧录设置" onClick={() => f.setStep("setup")} />
   );
   return (
     <>
-      <Panel
-        title="开发板固件"
-        description="使用内置官方 PABotBase2 固件更新 ESP32-S3"
-        icon={<AppIcon name="cpu" />}
-      >
+      <VStack gap={2}>
         <SettingRow
           label="当前固件"
           description={
@@ -58,14 +49,13 @@ export function FirmwarePanel() {
         >
           <Button
             label={f.busy ? "查看烧录进度" : "管理固件"}
-            variant={f.busy ? "secondary" : "primary"}
             onClick={f.show}
           />
         </SettingRow>
         <Text color="secondary" size="sm">
-          完整备份可选；写入前会核对芯片和固件，完成后校验内容。
+          使用内置官方 PABotBase2 固件更新 ESP32-S3。完整备份可选；写入前会核对芯片和固件，完成后校验内容。
         </Text>
-      </Panel>
+      </VStack>
       <StandardDialog
         open={f.open}
         title={
@@ -111,10 +101,10 @@ export function FirmwarePanel() {
         }
       >
         {f.error && (
-          <Banner status="error" title="操作未完成" description={f.error} />
+          <Notice status="error" title="操作未完成" description={f.error} />
         )}
         {f.unavailable && (
-          <Banner
+          <Notice
             status="warning"
             title="后端未就绪"
             description="请等待连接恢复，页面不会自动重复烧录。"
@@ -199,7 +189,7 @@ export function FirmwarePanel() {
               </div>
             )}
             {f.bundledError && (
-              <Banner
+              <Notice
                 status="error"
                 title="内置固件不可用"
                 description={f.bundledError}
@@ -254,7 +244,7 @@ export function FirmwarePanel() {
               </VStack>
             </Collapsible>
             {!f.automationIdle && (
-              <Banner
+              <Notice
                 status="warning"
                 title="请先停止自动选岛"
                 description="暂停不等于停止，请在控制台结束当前自动化。"
@@ -289,14 +279,16 @@ export function FirmwarePanel() {
                 {f.confirmation?.image.filename}
               </Text>
             </div>
-            <div {...stylex.props(ui.metrics)}>
-              <Metric label="传输速率" value={f.baud} />
-              <Metric
-                label="完整备份"
-                value={f.backupRequested ? "开启" : "不备份，直接写入"}
-              />
-            </div>
-            <Banner
+            <MetricList
+              items={[
+                { label: "传输速率", value: f.baud },
+                {
+                  label: "完整备份",
+                  value: f.backupRequested ? "开启" : "不备份，直接写入",
+                },
+              ]}
+            />
+            <Notice
               status="warning"
               title="原固件将被覆盖"
               description={`官方完整固件会替换 Bootloader 和自定义关灯补丁。${f.backupRequested ? "先备份整片 Flash，校验成功才开始写入。" : "本次不会创建恢复备份；如果需要保留原始内容，请返回开启备份。"}`}
@@ -312,14 +304,14 @@ export function FirmwarePanel() {
         {f.step === "progress" && (
           <>
             {f.uncertain ? (
-              <Banner
+              <Notice
                 status="warning"
                 title="正在确认任务是否已启动"
                 description="请求可能已被后端接收。请查询状态，不要再次提交烧录。"
               />
             ) : (
               <>
-                <Token
+                <StatusLabel
                   label={
                     status?.busy
                       ? "进行中"
@@ -329,12 +321,14 @@ export function FirmwarePanel() {
                           ? "需要重新连接"
                           : "未完成"
                   }
-                  color={
-                    status?.stage === "succeeded"
-                      ? "green"
-                      : status?.stage === "failed"
-                        ? "red"
-                        : "default"
+                  tone={
+                    status?.busy
+                      ? "running"
+                      : status?.stage === "succeeded"
+                        ? "success"
+                        : status?.stage === "failed"
+                          ? "error"
+                          : "warning"
                   }
                 />
                 <Text xstyle={ui.wrap}>
@@ -353,24 +347,25 @@ export function FirmwarePanel() {
                   />
                 )}
                 {status?.stage === "backing_up" && (
-                  <div {...stylex.props(ui.metrics)}>
-                    <Metric
-                      label="已读取"
-                      value={`${((status.bytesRead ?? 0) / 1048576).toFixed(1)} / ${((status.totalBytes ?? 0) / 1048576).toFixed(0)} MiB`}
-                    />
-                    <Metric
-                      label="读取速度"
-                      value={`${((status.bytesPerSecond ?? 0) / 1024).toFixed(1)} KiB/s`}
-                    />
-                    <Metric
-                      label="预计剩余"
-                      value={
-                        status.estimatedSeconds == null
-                          ? "计算中"
-                          : `约 ${Math.ceil(status.estimatedSeconds / 60)} 分钟`
-                      }
-                    />
-                  </div>
+                  <MetricList
+                    items={[
+                      {
+                        label: "已读取",
+                        value: `${((status.bytesRead ?? 0) / 1048576).toFixed(1)} / ${((status.totalBytes ?? 0) / 1048576).toFixed(0)} MiB`,
+                      },
+                      {
+                        label: "读取速度",
+                        value: `${((status.bytesPerSecond ?? 0) / 1024).toFixed(1)} KiB/s`,
+                      },
+                      {
+                        label: "预计剩余",
+                        value:
+                          status.estimatedSeconds == null
+                            ? "计算中"
+                            : `约 ${Math.ceil(status.estimatedSeconds / 60)} 分钟`,
+                      },
+                    ]}
+                  />
                 )}
                 {f.busy && (
                   <Text size="sm" color="secondary">

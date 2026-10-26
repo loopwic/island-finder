@@ -10,6 +10,7 @@ import {
 import { ConsoleProvider } from './app/console-context';
 import { AppErrorBoundary } from './app/app-error-boundary';
 import { RootLayout } from './app/root-layout';
+import { parseSettingsTab, type SettingsTab } from './routes/settings-tabs';
 import { AppTheme } from './app/theme';
 import { InternationalizationProvider } from '@astryxdesign/core/i18n';
 import zhCN from '@astryxdesign/core/locales/zh-CN.json';
@@ -30,6 +31,9 @@ const workbenchRoute = createRoute({
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/settings',
+  validateSearch: (search: Record<string, unknown>): { tab?: SettingsTab } => ({
+    tab: parseSettingsTab(search.tab),
+  }),
   component: lazyRouteComponent(() => import('./routes/settings-page'), 'SettingsPage'),
 });
 const auditRoute = createRoute({

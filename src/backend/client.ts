@@ -109,6 +109,17 @@ export type FirmwareStatus = {
 export type FirmwarePort = { path: string; description: string; identity: string };
 export type FirmwareConfirmation = { confirmationToken: string; port: string; image: FirmwareImage };
 
+export type RuntimeAction =
+  | 'start'
+  | 'pause'
+  | 'resume'
+  | 'stop'
+  | 'accept'
+  | 'reject'
+  | 'controller-connect'
+  | 'controller-disconnect'
+  | 'capture-reconnect';
+
 export type BackendStateStreamMessage = {
   type: 'state' | 'heartbeat';
   sequence: number;
@@ -257,7 +268,7 @@ export const backend = {
     method: 'POST',
     headers: { 'X-Island-Finder-Instance': instanceId },
   }),
-  action: (action: string, instanceId: string, startToken?: string) => request<BackendState>(`/v1/actions/${action}`, {
+  action: (action: RuntimeAction, instanceId: string, startToken?: string) => request<BackendState>(`/v1/actions/${action}`, {
     method: 'POST',
     headers: {
       'X-Island-Finder-Instance': instanceId,

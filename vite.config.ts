@@ -4,7 +4,9 @@ import stylex from '@stylexjs/unplugin/vite';
 
 export default defineConfig({
   plugins: [
-    stylex({
+    // Unit tests cover plain modules only; the StyleX compiler keeps file
+    // handles open and delayed every Vitest exit by its 10 s close timeout.
+    !process.env.VITEST && stylex({
       classNamePrefix: 'island',
       debug: false,
       cssInjectionTarget: (fileName) => /(?:^|\/)index(?:-[^/]+)?\.css$/.test(fileName),

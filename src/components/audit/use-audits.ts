@@ -4,6 +4,9 @@ import {
   type AuditSummary,
   type SelectionAudit,
 } from "../../backend/client";
+import { errorMessage } from "../../domain/errors";
+
+const HISTORY_POLL_MS = 5_000;
 
 export function useAudits() {
   const [audits, setAudits] = useState<AuditSummary[]>([]);
@@ -20,7 +23,15 @@ export function useAudits() {
     let disposed = false;
     let timer: number | undefined;
     setHistoryLoading(true);
+    const schedule = () => {
+      if (disposed) return;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => void refresh(), HISTORY_POLL_MS);
+    };
     const refresh = async () => {
+      // A hidden window has nobody reading the list; the visibility listener
+      // refreshes immediately when it is shown again.
+      if (document.hidden) return;
       try {
         const response = await backend.auditHistory();
         if (disposed) return;
@@ -34,20 +45,23 @@ export function useAudits() {
         setHistoryError(null);
       } catch (reason) {
         if (!disposed)
-          setHistoryError(
-            reason instanceof Error ? reason.message : "无法读取审计记录",
-          );
+          setHistoryError(errorMessage(reason, "无法读取审计记录"));
       } finally {
         if (!disposed) {
           setHistoryLoading(false);
-          timer = window.setTimeout(() => void refresh(), 5000);
+          schedule();
         }
       }
     };
+    const onVisibilityChange = () => {
+      if (!document.hidden) void refresh();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
     void refresh();
     return () => {
       disposed = true;
-      if (timer !== undefined) window.clearTimeout(timer);
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [historyRevision]);
   const summary = useMemo(
@@ -72,9 +86,7 @@ export function useAudits() {
       })
       .catch((reason) => {
         if (!disposed)
-          setDetailError(
-            reason instanceof Error ? reason.message : "无法读取这轮审计详情",
-          );
+          setDetailError(errorMessage(reason, "无法读取这轮审计详情"));
       })
       .finally(() => {
         if (!disposed) setDetailLoading(false);
