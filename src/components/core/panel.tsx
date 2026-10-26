@@ -1,68 +1,80 @@
 import { Text } from "@astryxdesign/core/Text";
 import { Button } from "@astryxdesign/core/Button";
+import { Heading } from "@astryxdesign/core/Heading";
 import { Spinner } from "@astryxdesign/core/Spinner";
+import { Grid } from "@astryxdesign/core/Grid";
 import { HStack, VStack } from "@astryxdesign/core/Layout";
 import { EmptyState } from "@astryxdesign/core/EmptyState";
 import * as stylex from "@stylexjs/stylex";
 import type { ReactNode } from "react";
 import { ui } from "./ui.stylex";
 import { StandardDialog } from "./standard-dialog";
-import { presentation } from "./presentation.stylex";
 
-export function Panel({
+/** A titled block on the canvas. The heading stays small; content leads. */
+export function Section({
   title,
   description,
   actions,
-  icon,
+  isInset = false,
   children,
 }: {
   title: string;
   description?: string;
   actions?: ReactNode;
-  icon?: ReactNode;
+  /** Align the title with property rows, which carry a 12px inset. */
+  isInset?: boolean;
   children: ReactNode;
 }) {
   return (
-    <VStack gap={4} role="region" aria-label={title}>
-      <HStack hAlign="between" vAlign="center" gap={3}>
-        {icon && (
-          <span {...stylex.props(presentation.identity)} aria-hidden="true">
-            {icon}
-          </span>
-        )}
-        <VStack gap={1} xstyle={ui.grow}>
-          <Text as="h2" type="large" weight="semibold">
+    <section {...stylex.props(ui.section)} aria-label={title}>
+      <HStack
+        hAlign="between"
+        vAlign="center"
+        gap={3}
+        xstyle={isInset ? ui.sectionInset : undefined}
+      >
+        <VStack gap={0.5} xstyle={ui.grow}>
+          <Heading level={5} accessibilityLevel={2} color="secondary">
             {title}
-          </Text>
+          </Heading>
           {description && (
-            <Text size="sm" color="secondary">
+            <Text type="supporting" color="secondary">
               {description}
             </Text>
           )}
         </VStack>
         {actions}
       </HStack>
-      <VStack gap={4}>{children}</VStack>
-    </VStack>
+      {children}
+    </section>
   );
 }
-export function Metric({ label, value }: { label: string; value: ReactNode }) {
+
+export type MetricItem = { label: string; value: ReactNode };
+
+export function MetricList({ items }: { items: MetricItem[] }) {
   return (
-    <div {...stylex.props(ui.tight)}>
-      <Text size="sm" color="secondary">
-        {label}
-      </Text>
-      <Text
-        type="display-3"
-        weight="semibold"
-        hasTabularNumbers
-        xstyle={presentation.metricValue}
-      >
-        {value}
-      </Text>
-    </div>
+    <dl {...stylex.props(ui.bare)}>
+      <Grid columnGap={8} rowGap={4} columns={{ minWidth: 112, repeat: "fit" }}>
+        {items.map((item) => (
+          <VStack key={item.label} gap={1}>
+            <dt {...stylex.props(ui.bare)}>
+              <Text type="supporting" color="secondary" display="block">
+                {item.label}
+              </Text>
+            </dt>
+            <dd {...stylex.props(ui.bare)}>
+              <Text as="div" size="base" weight="semibold" hasTabularNumbers>
+                {item.value}
+              </Text>
+            </dd>
+          </VStack>
+        ))}
+      </Grid>
+    </dl>
   );
 }
+
 export function EmptyView({
   title,
   description,
@@ -84,6 +96,7 @@ export function EmptyView({
     />
   );
 }
+
 export function ErrorDialog({
   title = "操作未完成",
   error,
@@ -101,12 +114,7 @@ export function ErrorDialog({
       title={title}
       onClose={onClose}
       actions={
-        <>
-          <Button label="关闭" onClick={onClose} />
-          {onRetry && (
-            <Button label="重试" variant="primary" onClick={onRetry} />
-          )}
-        </>
+        onRetry && <Button label="重试" variant="primary" onClick={onRetry} />
       }
     >
       <Text wordBreak="break-word">{error ?? ""}</Text>

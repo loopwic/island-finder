@@ -1,81 +1,59 @@
-import { Layout, LayoutContent, VStack } from "@astryxdesign/core/Layout";
-import { Tab, TabList } from "@astryxdesign/core/TabList";
-import { Divider } from "@astryxdesign/core/Divider";
-import { useState } from "react";
+import { VStack } from "@astryxdesign/core/Layout";
+import * as stylex from "@stylexjs/stylex";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { CaptureSettings } from "../components/settings/capture-settings";
 import { ControllerSettings } from "../components/settings/controller-settings";
 import { RecognitionSettings } from "../components/settings/recognition-settings";
 import { FirmwarePanel } from "../components/firmware/firmware-panel";
-import { AppIcon } from "../components/core/icons";
-import { settingsStyles } from "../components/settings/settings.stylex";
+import { PageContent } from "../components/core/page";
+import { pageStyles } from "../components/core/page.stylex";
+import { PillTabList } from "../components/core/pill-tab-list";
+import { settingsTabs } from "./settings-tabs";
+
+const tabItems = settingsTabs.map((item) => ({
+  value: item.value,
+  label: item.label,
+  tabId: `settings-tab-${item.value}`,
+  panelId: "settings-panel",
+}));
 
 export function SettingsPage() {
-  const [tab, setTab] = useState("devices");
+  const navigate = useNavigate();
+  const { tab = "devices" } = useSearch({ from: "/settings" });
   return (
-    <Layout
-      height="auto"
-      contentWidth={880}
-      padding={8}
-      content={
-        <LayoutContent>
-          <VStack gap={8}>
-            <TabList
-              value={tab}
-              onChange={setTab}
-              aria-label="设备与识别设置"
-              role="tablist"
-              layout="hug"
-              size="lg"
-              hasDivider
-            >
-              <Tab
-                xstyle={settingsStyles.tab}
-                value="devices"
-                label="设备连接"
-                panelId="settings-panel"
-                icon={<AppIcon name="camera" />}
-              />
-              <Tab
-                xstyle={settingsStyles.tab}
-                value="recognition"
-                label="识别设置"
-                panelId="settings-panel"
-                icon={<AppIcon name="settings" />}
-              />
-              <Tab
-                xstyle={settingsStyles.tab}
-                value="firmware"
-                label="开发板固件"
-                panelId="settings-panel"
-                icon={<AppIcon name="cpu" />}
-              />
-            </TabList>
-            <div
-              id="settings-panel"
-              role="tabpanel"
-              aria-label={
-                tab === "devices"
-                  ? "设备连接"
-                  : tab === "firmware"
-                    ? "开发板固件"
-                    : "识别设置"
-              }
-            >
-              {tab === "devices" ? (
-                <VStack gap={8}>
-                  <CaptureSettings />
-                  <Divider />
-                  <ControllerSettings />
-                </VStack>
-              ) : tab === "firmware" ? (
-                <FirmwarePanel />
-              ) : (
-                <RecognitionSettings />
-              )}
-            </div>
-          </VStack>
-        </LayoutContent>
-      }
-    />
+    <>
+      <div {...stylex.props(pageStyles.tabRow)}>
+        <PillTabList
+          label="设备与识别设置"
+          items={tabItems}
+          value={tab}
+          onChange={(next) =>
+            void navigate({
+              to: "/settings",
+              search: { tab: next },
+              replace: true,
+            })
+          }
+        />
+      </div>
+      <PageContent maxWidth="45rem">
+        <div
+          id="settings-panel"
+          role="tabpanel"
+          aria-labelledby={`settings-tab-${tab}`}
+        >
+          {tab === "devices" ? (
+            <VStack gap={8}>
+              <CaptureSettings />
+              <ControllerSettings />
+            </VStack>
+          ) : tab === "firmware" ? (
+            <FirmwarePanel />
+          ) : (
+            <RecognitionSettings />
+          )}
+        </div>
+      </PageContent>
+    </>
   );
 }

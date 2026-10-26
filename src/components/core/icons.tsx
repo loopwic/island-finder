@@ -25,6 +25,14 @@ import {
   LinkSquare02Icon,
   Search01Icon,
   Menu01Icon,
+  GitBranchIcon,
+  MaximizeScreenIcon,
+  UserIcon,
+  Calendar03Icon as CalendarIcon,
+  Target02Icon,
+  KeyboardIcon,
+  ServerStack01Icon,
+  GameController01Icon,
 } from "@hugeicons/core-free-icons";
 import type { IconRegistry } from "@astryxdesign/core/Icon";
 import {
@@ -72,12 +80,22 @@ const glyphs = {
   external: LinkSquare02Icon,
   search: Search01Icon,
   menu: Menu01Icon,
+  clock: Clock01Icon,
+  revision: GitBranchIcon,
+  resolution: MaximizeScreenIcon,
+  user: UserIcon,
+  calendar: CalendarIcon,
+  target: Target02Icon,
+  keyboard: KeyboardIcon,
+  server: ServerStack01Icon,
+  gamepad: GameController01Icon,
 };
+export type AppIconName = keyof typeof glyphs;
 export function AppIcon({
   name,
   size = "1em",
 }: {
-  name: keyof typeof glyphs;
+  name: AppIconName;
   size?: number | string;
 }) {
   return <HugeiconsIcon icon={glyphs[name]} size={size} aria-hidden="true" />;
@@ -116,7 +134,7 @@ export const iconRegistry: IconRegistry = {
   chevronsRight: (
     <HugeiconsIcon icon={ArrowRightDoubleIcon} size="1em" aria-hidden="true" />
   ),
-  clock: <HugeiconsIcon icon={Clock01Icon} size="1em" aria-hidden="true" />,
+  clock: <AppIcon name="clock" />,
   copy: <HugeiconsIcon icon={Copy01Icon} size="1em" aria-hidden="true" />,
   eyeSlash: <HugeiconsIcon icon={ViewOffIcon} size="1em" aria-hidden="true" />,
   funnel: (

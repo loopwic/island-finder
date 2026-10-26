@@ -106,55 +106,6 @@ export function extractFeature(
   return featureFromImageData(cropPixels(source, region));
 }
 
-function zeroMeanCosine(left: number[], right: number[]): number {
-  if (left.length !== right.length || left.length === 0) return 0;
-  const meanLeft = left.reduce((sum, value) => sum + value, 0) / left.length;
-  const meanRight = right.reduce((sum, value) => sum + value, 0) / right.length;
-  let dot = 0;
-  let normLeft = 0;
-  let normRight = 0;
-  for (let i = 0; i < left.length; i += 1) {
-    const a = left[i] - meanLeft;
-    const b = right[i] - meanRight;
-    dot += a * b;
-    normLeft += a * a;
-    normRight += b * b;
-  }
-  if (normLeft < 1e-8 || normRight < 1e-8) {
-    return Math.abs(meanLeft - meanRight) < 0.02 ? 1 : 0;
-  }
-  return Math.max(0, Math.min(1, (dot / Math.sqrt(normLeft * normRight) + 1) / 2));
-}
-
-function meanAbsoluteSimilarity(left: number[], right: number[]): number {
-  if (left.length !== right.length || left.length === 0) return 0;
-  let difference = 0;
-  for (let i = 0; i < left.length; i += 1) difference += Math.abs(left[i] - right[i]);
-  return Math.max(0, 1 - difference / left.length);
-}
-
-function histogramIntersection(left: number[], right: number[]): number {
-  if (left.length !== right.length || left.length === 0) return 0;
-  let overlap = 0;
-  let total = 0;
-  for (let i = 0; i < left.length; i += 1) {
-    overlap += Math.min(left[i], right[i]);
-    total += Math.max(left[i], right[i]);
-  }
-  return total === 0 ? 1 : overlap / total;
-}
-
-export function compareFeatures(left: FeatureVector, right: FeatureVector): number {
-  const structure = zeroMeanCosine(left.luminance, right.luminance);
-  const landWaterShape = zeroMeanCosine(left.chroma, right.chroma);
-  const edgeShape = meanAbsoluteSimilarity(left.edges, right.edges);
-  const color = histogramIntersection(left.colorHistogram, right.colorHistogram);
-  return Math.max(
-    0,
-    Math.min(1, structure * 0.24 + landWaterShape * 0.38 + edgeShape * 0.28 + color * 0.1),
-  );
-}
-
 export function capturePreview(
   source: CanvasImageSource,
   region?: NormalizedRegion,

@@ -1,27 +1,23 @@
 import { AppShell } from "@astryxdesign/core/AppShell";
 import { Card } from "@astryxdesign/core/Card";
 import { SideNav, SideNavItem } from "@astryxdesign/core/SideNav";
-import {
-  HStack,
-  Layout,
-  LayoutContent,
-  VStack,
-} from "@astryxdesign/core/Layout";
+import { Layout, LayoutContent, VStack } from "@astryxdesign/core/Layout";
 import { Text } from "@astryxdesign/core/Text";
-import * as stylex from "@stylexjs/stylex";
-import { presentation } from "../components/core/presentation.stylex";
+import { Token } from "@astryxdesign/core/Token";
 import { Button } from "@astryxdesign/core/Button";
-import { Banner } from "@astryxdesign/core/Banner";
 import { useTheme } from "@astryxdesign/core/theme";
+import * as stylex from "@stylexjs/stylex";
 import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useState } from "react";
 import { useConsole } from "./console-context";
 import { useThemeMode } from "./theme-mode-context";
 import { AppIcon } from "../components/core/icons";
 import { ErrorDialog } from "../components/core/panel";
-import { ActivityLog } from "../components/console/activity-log";
+import { RunControls } from "../components/console/run-controls";
+import { presentation } from "../components/core/presentation.stylex";
 import { shellStyles } from "./shell.stylex";
 import { AppHeader } from "../components/core/app-header";
+import { Notice } from "../components/core/notice";
 
 const pages = [
   { to: "/", label: "运行控制台", icon: "dashboard" },
@@ -36,21 +32,16 @@ export function RootLayout() {
   });
   const [mobileOpen, setMobileOpen] = useState(false);
   const {
-    runtime,
     notice,
     dismissNotice,
     retrySettings,
     settingsSyncState,
-    ready,
     connectionStatus,
     connectionError,
-    runAction,
     reconnect,
   } = useConsole();
   const { mode } = useTheme();
   const { toggle } = useThemeMode();
-  const enabled = !["idle", "error"].includes(runtime.phase);
-  const connected = connectionStatus === "connected";
   const page = pages.find((item) => item.to === pathname) ?? pages[0];
 
   return (
@@ -67,42 +58,33 @@ export function RootLayout() {
         }}
         sideNav={
           <SideNav
+            aria-label="主导航"
             xstyle={shellStyles.navigation}
             header={
-              <HStack
-                gap={3}
-                vAlign="center"
-                paddingBlock={4}
-                paddingInline={2}
-              >
-                <span {...stylex.props(presentation.identity)}>
+              <div {...stylex.props(shellStyles.brand)}>
+                <span {...stylex.props(presentation.brandMark)}>
                   <AppIcon name="map" />
                 </span>
-                <VStack gap={1}>
-                  <Text weight="semibold">Island Finder</Text>
-                  <Text size="sm" color="secondary">
-                    {import.meta.env.DEV ? "开发模式" : "本地自动选岛"}
-                  </Text>
-                </VStack>
-              </HStack>
+                <Text weight="medium" maxLines={1}>
+                  Island Finder
+                </Text>
+                {import.meta.env.DEV && <Token label="开发" size="sm" />}
+              </div>
             }
             footer={
               <SideNavItem
                 label={mode === "dark" ? "浅色模式" : "深色模式"}
-                icon={
-                  <AppIcon name={mode === "dark" ? "sun" : "moon"} size={18} />
-                }
+                icon={<AppIcon name={mode === "dark" ? "sun" : "moon"} />}
                 onClick={toggle}
               />
             }
           >
-            <VStack gap={1}>
+            <VStack gap={0.5}>
               {pages.map((item) => (
                 <SideNavItem
                   key={item.to}
                   label={item.label}
-                  size="lg"
-                  icon={<AppIcon name={item.icon} size={18} />}
+                  icon={<AppIcon name={item.icon} />}
                   isSelected={pathname === item.to}
                   onClick={() => {
                     setMobileOpen(false);
@@ -114,38 +96,28 @@ export function RootLayout() {
           </SideNav>
         }
       >
-        <Card padding={0} height="100%" width="100%">
+        <Card
+          padding={0}
+          height="100%"
+          width="100%"
+          xstyle={shellStyles.contentFrame}
+        >
           <Layout
             padding={0}
             header={
               <AppHeader
                 title={page.label}
-                actions={
-                  <>
-                    {pathname === "/" && (
-                      <>
-                        <ActivityLog />
-                        <Button
-                          label={enabled ? "停止选岛" : "开始选岛"}
-                          variant={enabled ? "secondary" : "primary"}
-                          icon={<AppIcon name={enabled ? "stop" : "play"} />}
-                          isDisabled={!connected || (!enabled && !ready)}
-                          clickAction={() =>
-                            runAction(enabled ? "stop" : "start")
-                          }
-                        />
-                      </>
-                    )}
-                  </>
-                }
+                icon={page.icon}
+                actions={pathname === "/" ? <RunControls /> : undefined}
               />
             }
             content={
               <LayoutContent padding={0}>
                 <VStack gap={0} xstyle={shellStyles.route}>
-                  {!connected && (
-                    <Banner
+                  {connectionStatus !== "connected" && (
+                    <Notice
                       status="warning"
+                      container="section"
                       title={
                         connectionStatus === "disconnected"
                           ? "后端连接中断"
@@ -155,9 +127,11 @@ export function RootLayout() {
                         connectionError ??
                         "当前任务由后端继续持有，恢复连接后同步。"
                       }
-                      endContent={
+                      action={
                         <Button
                           label="重新连接"
+                          size="sm"
+                          icon={<AppIcon name="refresh" size={14} />}
                           clickAction={reconnect}
                           isDisabled={connectionStatus === "connecting"}
                         />

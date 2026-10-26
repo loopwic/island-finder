@@ -3,8 +3,22 @@ import { neutralTheme } from '@astryxdesign/theme-neutral/built';
 import { useState, type ReactNode } from 'react';
 import { ThemeModeContext } from './theme-mode-context';
 import { iconRegistry } from '../components/core/icons';
+import { figmaComponents, figmaTokens, figmaTypography } from './design-tokens';
 
-const theme = defineTheme({ name: 'island-finder', extends: neutralTheme, icons: iconRegistry });
+const theme = defineTheme({
+  name: 'island-finder',
+  extends: neutralTheme,
+  icons: iconRegistry,
+  typography: {
+    ...figmaTypography,
+    heading: {
+      ...figmaTypography.heading,
+      weights: { 1: 'semibold', 2: 'semibold', 3: 'medium', 4: 'medium', 5: 'medium', 6: 'medium' },
+    },
+  },
+  tokens: figmaTokens,
+  components: figmaComponents,
+});
 export function AppTheme({ children }: { children: ReactNode }) {
   const [mode, setMode] = useState<'light' | 'dark' | 'system'>(() => {
     try {

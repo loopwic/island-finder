@@ -1,12 +1,21 @@
 import { Button } from "@astryxdesign/core/Button";
 import { Text } from "@astryxdesign/core/Text";
-import { Token } from "@astryxdesign/core/Token";
+import { StatusLabel, type StatusTone } from "../core/status-label";
 import { useState } from "react";
 import * as stylex from "@stylexjs/stylex";
 import { useConsole } from "../../app/console-context";
 import { StandardDialog } from "../core/standard-dialog";
 import { AppIcon } from "../core/icons";
 import { ui } from "../core/ui.stylex";
+import type { LogLevel } from "../../domain/types";
+
+const levelLabels: Record<LogLevel, { label: string; tone: StatusTone }> = {
+  info: { label: "信息", tone: "neutral" },
+  success: { label: "完成", tone: "success" },
+  warning: { label: "注意", tone: "warning" },
+  error: { label: "错误", tone: "error" },
+};
+
 export function ActivityLog() {
   const [open, setOpen] = useState(false);
   const { logs, clearLogs } = useConsole();
@@ -14,9 +23,11 @@ export function ActivityLog() {
     <>
       <Button
         label="运行记录"
+        tooltip="运行记录"
         variant="ghost"
+        size="sm"
         isIconOnly
-        icon={<AppIcon name="audit" />}
+        icon={<AppIcon name="audit" size={14} />}
         onClick={() => setOpen(true)}
       />
       <StandardDialog
@@ -38,7 +49,7 @@ export function ActivityLog() {
         )}
         {logs.map((entry) => (
           <div
-            {...stylex.props(ui.tight, ui.padding, ui.divider)}
+            {...stylex.props(ui.tight)}
             key={entry.id}
           >
             <Text wordBreak="break-word">{entry.message}</Text>
@@ -48,15 +59,9 @@ export function ActivityLog() {
                   hour12: false,
                 })}
               </Text>
-              <Token
-                label={entry.level}
-                color={
-                  entry.level === "error"
-                    ? "red"
-                    : entry.level === "warning"
-                      ? "yellow"
-                      : "default"
-                }
+              <StatusLabel
+                size="supporting"
+                {...(levelLabels[entry.level] ?? levelLabels.info)}
               />
             </div>
           </div>
