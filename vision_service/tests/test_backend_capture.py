@@ -208,7 +208,10 @@ def test_english_name_flow_reads_back_each_letter_and_never_enters_candidate_sel
     settings = copy.deepcopy(DEFAULT_SETTINGS)
     settings["identity"].update({"name": "nook", "namePinyin": []})
     command_batches: list[list[dict[str, object]]] = []
-    controller = SimpleNamespace(run=lambda commands: command_batches.append(commands))
+    controller = SimpleNamespace(
+        run=lambda commands: command_batches.append(commands),
+        set_cancel_check=lambda _check: None,
+    )
     engine = AutomationEngine(
         lambda: settings,
         SimpleNamespace(),  # type: ignore[arg-type]
@@ -350,7 +353,7 @@ def test_map_gate_rejects_frozen_crossfade_then_accepts_stable_render():
     engine = AutomationEngine(
         lambda: {},
         None,  # type: ignore[arg-type]
-        SimpleNamespace(cancel=lambda: None),  # type: ignore[arg-type]
+        SimpleNamespace(cancel=lambda: None, set_cancel_check=lambda _check: None),  # type: ignore[arg-type]
         SimpleNamespace(),  # type: ignore[arg-type]
         lambda _snapshot: None,
         lambda _level, _message: None,
@@ -375,6 +378,7 @@ def _transition_retry_engine():
     presses: list[str] = []
     cancels: list[bool] = []
     controller = SimpleNamespace(
+        set_cancel_check=lambda _check: None,
         cancel=lambda: cancels.append(True),
         press=lambda button, _hold_ms, _after_ms: presses.append(button),
         run=lambda _commands: presses.append("RESTART"),
@@ -486,7 +490,7 @@ def _recognition_retry_engine():
     engine = AutomationEngine(
         lambda: {},
         SimpleNamespace(),  # type: ignore[arg-type]
-        SimpleNamespace(cancel=lambda: None),  # type: ignore[arg-type]
+        SimpleNamespace(cancel=lambda: None, set_cancel_check=lambda _check: None),  # type: ignore[arg-type]
         SimpleNamespace(),  # type: ignore[arg-type]
         lambda _snapshot: None,
         lambda level, message: logs.append((level, message)),

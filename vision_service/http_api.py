@@ -29,9 +29,15 @@ STATE_HEARTBEAT_INTERVAL_SECONDS = 5.0
 LOCAL_ORIGINS = {
     "http://127.0.0.1:4173",
     "http://localhost:4173",
+    "http://127.0.0.1:48197",
+    "http://localhost:48197",
     "http://tauri.localhost",
     "tauri://localhost",
 }
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+# Updated by every captured frame; the UI does not display them, so they must
+# not by themselves cause a full state push to every client four times a second.
+VOLATILE_CAPTURE_KEYS = {"lastFrameAt", "fps"}
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DIST_ROOT = PROJECT_ROOT / "apps" / "web" / "dist"
 
@@ -191,6 +197,17 @@ def create_app(runtime: BackendRuntime) -> FastAPI:
     install_firmware_routes(app, runtime, LOCAL_ORIGINS)
 
     @app.middleware("http")
+    async def reject_foreign_writes(request: Request, call_next: Any) -> Response:
+        # CORS only hides responses; a "simple" cross-site POST still reaches
+        # the handler. Browsers always send Origin on such writes, while local
+        # tools send none, so any foreign Origin is refused before it can
+        # change settings or trigger an action.
+        origin = request.headers.get("origin")
+        if request.method not in SAFE_METHODS and origin is not None and origin not in LOCAL_ORIGINS:
+            return _error(403, "不允许其他网页操作本机后端")
+        return await call_next(request)
+
+    @app.middleware("http")
     async def no_store(request: Request, call_next: Any) -> Response:
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
@@ -234,8 +251,16 @@ def create_app(runtime: BackendRuntime) -> FastAPI:
                 if state_task in done:
                     snapshot = state_task.result()
                     state_task = None
+                    comparable = {
+                        **snapshot,
+                        "capture": {
+                            key: value
+                            for key, value in snapshot.get("capture", {}).items()
+                            if key not in VOLATILE_CAPTURE_KEYS
+                        },
+                    }
                     encoded = json.dumps(
-                        snapshot,
+                        comparable,
                         ensure_ascii=False,
                         separators=(",", ":"),
                         sort_keys=True,

@@ -143,6 +143,10 @@ class RuntimeControlHandler(BaseHTTPRequestHandler):
         )
 
     def do_POST(self) -> None:  # noqa: N802
+        if self.headers.get("Origin") is not None:
+            # npm run stop sends no Origin; a web page must not stop the runtime.
+            self._respond(HTTPStatus.FORBIDDEN, {"error": "forbidden"})
+            return
         if self.path != "/shutdown":
             self._respond(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return

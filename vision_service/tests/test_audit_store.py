@@ -249,6 +249,9 @@ class _FakeController:
     def cancel(self) -> None:
         return
 
+    def set_cancel_check(self, _check) -> None:
+        return
+
 
 def _engine_with_audit(tmp_path, candidates: list[dict], *, stable_frames: int = 2):
     settings = {
