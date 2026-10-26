@@ -1,25 +1,49 @@
 import { create } from "@stylexjs/stylex";
 import {
-  colorVars,
-  spacingVars,
   borderVars,
+  colorVars,
+  focusVars,
   radiusVars,
+  shadowVars,
+  spacingVars,
 } from "@astryxdesign/core/theme/tokens.stylex";
+
 export const auditStyles = create({
   mobileRecords: { maxHeight: "18rem", overflowY: "auto" },
+  recordsHeader: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacingVars["--spacing-2"],
+    minHeight: spacingVars["--spacing-11"],
+    paddingInline: spacingVars["--spacing-4"],
+  },
+  // Rows inset 8px like Figma's list bands, so their text lands on 16px.
+  records: {
+    paddingInline: spacingVars["--spacing-2"],
+    paddingBlockEnd: spacingVars["--spacing-2"],
+  },
   row: {
-    padding: spacingVars["--spacing-3"],
+    paddingBlock: spacingVars["--spacing-2"],
+    paddingInline: spacingVars["--spacing-2"],
     borderRadius: radiusVars["--radius-element"],
   },
-  records: { padding: spacingVars["--spacing-2"] },
-  detail: { maxWidth: 1120, width: "100%", marginInline: "auto" },
-  factor: {
-    paddingBlock: spacingVars["--spacing-3"],
-    borderBlockEndWidth: borderVars["--border-width"],
-    borderBlockEndStyle: "solid",
-    borderBlockEndColor: colorVars["--color-border"],
-    ":last-child": { borderBlockEndWidth: 0 },
+  detail: { maxWidth: "60rem", width: "100%", marginInline: "auto" },
+  // One map: a card (Figma Shadow/Low) with equal 16px insets.
+  card: {
+    display: "grid",
+    gap: spacingVars["--spacing-3"],
+    padding: spacingVars["--spacing-4"],
+    borderWidth: borderVars["--border-width"],
+    borderStyle: "solid",
+    borderColor: colorVars["--color-border"],
+    borderRadius: radiusVars["--radius-container"],
+    backgroundColor: colorVars["--color-background-card"],
+    boxShadow: shadowVars["--shadow-low"],
+    minWidth: 0,
   },
+  selectedCard: { borderColor: colorVars["--color-accent"] },
+  factor: { paddingBlock: spacingVars["--spacing-1-5"] },
   factorLabel: {
     display: "flex",
     flex: 1,
@@ -29,15 +53,27 @@ export const auditStyles = create({
     gap: spacingVars["--spacing-2"],
     paddingInlineEnd: spacingVars["--spacing-2"],
   },
-  factorName: { width: 128, minWidth: 0 },
-  passed: { color: colorVars["--color-text-green"] },
-  failed: { color: colorVars["--color-text-red"] },
-  preview: { paddingInline: spacingVars["--spacing-3"] },
-  mapImage: { borderRadius: radiusVars["--radius-element"] },
-  summary: {
-    paddingBlock: spacingVars["--spacing-3"],
-    paddingInline: spacingVars["--spacing-4"],
-    backgroundColor: colorVars["--color-neutral"],
-    borderRadius: radiusVars["--radius-element"],
+  factorName: { flexBasis: "8rem", flexShrink: 0, minWidth: 0 },
+  metaIcon: {
+    display: "inline-flex",
+    color: colorVars["--color-icon-secondary"],
   },
+  passed: { display: "inline-flex", color: colorVars["--color-success"] },
+  failed: { display: "inline-flex", color: colorVars["--color-error"] },
+  zoomButton: {
+    display: "block",
+    width: "100%",
+    padding: 0,
+    borderWidth: 0,
+    backgroundColor: "transparent",
+    borderRadius: radiusVars["--radius-element"],
+    cursor: "zoom-in",
+    outline: {
+      default: "none",
+      ":focus-visible": `2px solid ${focusVars["--focus-outline-color"]}`,
+    },
+    outlineOffset: 2,
+    opacity: { default: 1, ":hover": 0.92 },
+  },
+  mapImage: { borderRadius: radiusVars["--radius-element"] },
 });

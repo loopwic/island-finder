@@ -1,12 +1,22 @@
 import { create } from "@stylexjs/stylex";
 import {
-  borderVars,
   colorVars,
   radiusVars,
   spacingVars,
 } from "@astryxdesign/core/theme/tokens.stylex";
 
 export const presentation = create({
+  brandMark: {
+    display: "grid",
+    placeItems: "center",
+    flexShrink: 0,
+    width: spacingVars["--spacing-6"],
+    height: spacingVars["--spacing-6"],
+    borderRadius: radiusVars["--radius-inner"],
+    backgroundColor: colorVars["--color-overlay-pressed"],
+    color: colorVars["--color-icon-secondary"],
+    fontSize: spacingVars["--spacing-4"],
+  },
   identity: {
     display: "grid",
     placeItems: "center",
@@ -14,7 +24,7 @@ export const presentation = create({
     width: spacingVars["--spacing-10"],
     height: spacingVars["--spacing-10"],
     borderRadius: radiusVars["--radius-container"],
-    backgroundColor: colorVars["--color-neutral"],
+    backgroundColor: colorVars["--color-overlay-pressed"],
     color: colorVars["--color-icon-secondary"],
     fontSize: spacingVars["--spacing-5"],
   },
@@ -27,15 +37,6 @@ export const presentation = create({
   metricValue: {
     letterSpacing: "-0.025em",
   },
-  metricStrip: {
-    paddingBlock: spacingVars["--spacing-5"],
-    borderBlockStartWidth: borderVars["--border-width"],
-    borderBlockStartStyle: "solid",
-    borderBlockStartColor: colorVars["--color-border"],
-    borderBlockEndWidth: borderVars["--border-width"],
-    borderBlockEndStyle: "solid",
-    borderBlockEndColor: colorVars["--color-border"],
-  },
   settingRow: {
     display: "grid",
     gridTemplateColumns: {
@@ -44,10 +45,7 @@ export const presentation = create({
     },
     alignItems: "center",
     gap: spacingVars["--spacing-4"],
-    paddingBlock: spacingVars["--spacing-4"],
-    borderBlockEndWidth: borderVars["--border-width"],
-    borderBlockEndStyle: "solid",
-    borderBlockEndColor: colorVars["--color-border"],
+    paddingBlock: spacingVars["--spacing-3"],
   },
   settingControl: { flexShrink: 0, minWidth: 0, maxWidth: "100%" },
 });

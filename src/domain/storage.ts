@@ -3,6 +3,7 @@ import type { FinderSettings } from './types';
 
 const STORAGE_KEY = 'island-finder.settings.v2';
 
+/** Reads settings left by builds that kept them in the browser, for one-time migration. */
 export function loadSettings(): FinderSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -33,8 +34,4 @@ export function loadSettings(): FinderSettings {
   } catch {
     return structuredClone(DEFAULT_SETTINGS);
   }
-}
-
-export function saveSettings(settings: FinderSettings): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
 }

@@ -1,25 +1,37 @@
 import { Button } from "@astryxdesign/core/Button";
+import { HStack } from "@astryxdesign/core/Layout";
 import { ProgressBar } from "@astryxdesign/core/ProgressBar";
 import { Text } from "@astryxdesign/core/Text";
-import { Token } from "@astryxdesign/core/Token";
 import * as stylex from "@stylexjs/stylex";
 import { useEffect, useState } from "react";
 import { useConsole } from "../../app/console-context";
+import type { RuntimePhase } from "../../domain/types";
 import { CapturePreview } from "./capture-preview";
-import { Panel, Metric } from "../core/panel";
-import { ui } from "../core/ui.stylex";
-import { AppIcon } from "../core/icons";
-import { presentation } from "../core/presentation.stylex";
+import { MetricList, Section } from "../core/panel";
+import { StatusLabel, type StatusTone } from "../core/status-label";
 import { workbenchStyles } from "./workbench.stylex";
 import {
   calculateFlowProgress,
   formatElapsed,
   phaseLabels,
   screenLabels,
+  useNow,
 } from "./runtime-display";
 
+const phaseTones: Record<RuntimePhase, StatusTone> = {
+  idle: "neutral",
+  awaitingDecision: "success",
+  paused: "warning",
+  error: "error",
+  fastForwarding: "running",
+  enteringName: "running",
+  enteringBirthday: "running",
+  scanning: "running",
+  restarting: "running",
+};
+
 export function CapturePanel() {
-  const { runtime, settings, active, runAction } = useConsole();
+  const { runtime, settings, runAction } = useConsole();
   const calculated = calculateFlowProgress(runtime, settings.stableFrames);
   const [flow, setFlow] = useState({
     run: runtime.runNumber,
@@ -43,86 +55,63 @@ export function CapturePanel() {
       }),
     [calculated, runtime.phase, runtime.runNumber],
   );
+  const now = useNow(runtime.startedAt !== null && runtime.phase !== "idle");
   const candidate =
     runtime.phase === "awaitingDecision" ? runtime.selectedCandidate : null;
   return (
-    <Panel
-      title="实时画面"
-      actions={
-        <Token
-          label={phaseLabels[runtime.phase]}
-          color={runtime.phase === "error" ? "red" : "default"}
-        />
-      }
-    >
-      <CapturePreview />
-      <div {...stylex.props(presentation.metricStrip, workbenchStyles.metrics)}>
-        <Metric label="轮次" value={runtime.runNumber || "—"} />
-        <Metric label="用时" value={formatElapsed(runtime.startedAt)} />
-        <Metric
-          label="综合阈值"
-          value={`${Math.round(settings.threshold * 100)}%`}
-        />
-      </div>
-      {runtime.phase !== "idle" && (
-        <ProgressBar
-          label={screenLabels[runtime.currentScreen]}
-          value={flow.value}
-          hasValueLabel
-          variant={
-            runtime.phase === "error"
-              ? "error"
-              : runtime.phase === "awaitingDecision"
-                ? "success"
-                : "neutral"
-          }
-        />
-      )}
-      <Text size="sm" color="secondary">
-        {runtime.lastMessage
-          .replace(runtime.currentScreen, screenLabels[runtime.currentScreen])
-          .replace(": ", "：")}
-      </Text>
-      {(active || runtime.phase === "paused") && (
-        <div {...stylex.props(ui.row, ui.end)}>
-          {runtime.phase === "paused" ? (
-            <Button
-              label="继续"
-              icon={<AppIcon name="play" />}
-              clickAction={() => runAction("resume")}
+    <div {...stylex.props(workbenchStyles.main)}>
+      <Section
+        title="实时画面"
+        actions={
+          <StatusLabel
+            tone={phaseTones[runtime.phase]}
+            label={phaseLabels[runtime.phase]}
+          />
+        }
+      >
+        <CapturePreview />
+        <div {...stylex.props(workbenchStyles.status)}>
+          {runtime.phase !== "idle" && (
+            <ProgressBar
+              label={screenLabels[runtime.currentScreen]}
+              value={flow.value}
+              hasValueLabel
+              variant={
+                runtime.phase === "error"
+                  ? "error"
+                  : runtime.phase === "awaitingDecision"
+                    ? "success"
+                    : "neutral"
+              }
             />
-          ) : (
-            active && (
-              <Button
-                label="暂停"
-                icon={<AppIcon name="pause" />}
-                clickAction={() => runAction("pause")}
-              />
-            )
           )}
+          <Text color="secondary" role="status">
+            {runtime.lastMessage}
+          </Text>
         </div>
-      )}
+      </Section>
       {candidate && (
         <section
-          {...stylex.props(ui.stack, ui.padding, ui.panel, ui.selected)}
+          {...stylex.props(workbenchStyles.decision)}
           aria-label="候选岛确认"
         >
-          <Text weight="semibold">
-            发现候选岛：地图 {candidate.cardIndex + 1}
-          </Text>
-          <Text color="secondary">
-            综合评分 {(candidate.score * 100).toFixed(1)}%，等待你决定
-          </Text>
-          <div {...stylex.props(ui.row)}>
+          <HStack hAlign="between" vAlign="center" gap={3} wrap="wrap">
+            <Text weight="semibold">地图 {candidate.cardIndex + 1} 通过全部硬条件</Text>
+            <Text color="secondary" hasTabularNumbers>
+              综合 {(candidate.score * 100).toFixed(1)}%
+            </Text>
+          </HStack>
+          <HStack gap={4} wrap="wrap">
             {candidate.factors.map((factor) => (
-              <Token
+              <StatusLabel
                 key={factor.key}
+                size="supporting"
+                tone={factor.passed ? "success" : "error"}
                 label={`${factor.label} ${Math.round(factor.score * 100)}%`}
-                color={factor.passed ? "green" : "red"}
               />
             ))}
-          </div>
-          <div {...stylex.props(ui.row)}>
+          </HStack>
+          <HStack gap={2} wrap="wrap">
             <Button
               label="保留这个岛"
               variant="primary"
@@ -132,9 +121,19 @@ export function CapturePanel() {
               label="放弃并重来"
               clickAction={() => runAction("reject")}
             />
-          </div>
+          </HStack>
         </section>
       )}
-    </Panel>
+      <MetricList
+        items={[
+          { label: "轮次", value: runtime.runNumber || "—" },
+          { label: "用时", value: formatElapsed(runtime.startedAt, now) },
+          {
+            label: "综合阈值",
+            value: `${Math.round(settings.threshold * 100)}%`,
+          },
+        ]}
+      />
+    </div>
   );
 }

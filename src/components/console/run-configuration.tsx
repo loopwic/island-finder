@@ -1,35 +1,21 @@
 import { Button } from "@astryxdesign/core/Button";
-import { HStack, VStack } from "@astryxdesign/core/Layout";
-import { List, ListItem } from "@astryxdesign/core/List";
 import { Text } from "@astryxdesign/core/Text";
-import { StatusDot } from "@astryxdesign/core/StatusDot";
-import { Divider } from "@astryxdesign/core/Divider";
 import * as stylex from "@stylexjs/stylex";
 import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { useConsole } from "../../app/console-context";
 import { StandardDialog } from "../core/standard-dialog";
+import { Section } from "../core/panel";
+import {
+  PropertyControl,
+  PropertyList,
+  PropertyRow,
+} from "../core/property-list";
+import { StatusLabel } from "../core/status-label";
+import { ui } from "../core/ui.stylex";
 import { IdentityPanel } from "./identity-panel";
 import { TargetPanel } from "./target-panel";
-import { AppIcon } from "../core/icons";
-import { presentation } from "../core/presentation.stylex";
-
-function ConnectionState({
-  connected,
-  label,
-}: {
-  connected: boolean;
-  label: string;
-}) {
-  return (
-    <HStack gap={2} vAlign="center">
-      <StatusDot variant={connected ? "success" : "neutral"} label={label} />
-      <Text size="sm" color="secondary">
-        {label}
-      </Text>
-    </HStack>
-  );
-}
+import { workbenchStyles } from "./workbench.stylex";
 
 export function RunConfiguration() {
   const [editing, setEditing] = useState<"identity" | "target" | null>(null);
@@ -41,106 +27,114 @@ export function RunConfiguration() {
     settings,
     settingsLoaded,
     identityReady,
+    state,
   } = useConsole();
+  const identity = settings.identity;
+  const firmwareBusy = Boolean(state?.firmware?.busy);
   return (
-    <>
-      <VStack gap={8}>
-        <VStack gap={3} role="region" aria-label="本轮设置">
-          <Text as="h2" type="large" weight="semibold">
-            本轮设置
-          </Text>
-          <List density="balanced">
-            <ListItem
-              label="岛民资料"
-              startContent={
-                <span
-                  {...stylex.props(
-                    presentation.identity,
-                    presentation.smallIdentity,
-                  )}
-                >
-                  {settings.identity.name.slice(0, 1) || "岛"}
-                </span>
-              }
-              description={
-                settingsLoaded
-                  ? settings.identity.name || "尚未填写"
-                  : "正在读取"
-              }
+    <div {...stylex.props(workbenchStyles.aside)}>
+      <Section title="本轮设置" isInset>
+        <PropertyList label="本轮设置">
+          <PropertyRow label="岛民" isControl>
+            <PropertyControl
+              label="编辑岛民资料"
+              icon="user"
               onClick={() => setEditing("identity")}
-              endContent={<AppIcon name="right" />}
-            />
-            <ListItem
-              label="选岛目标"
-              startContent={
-                <span
-                  {...stylex.props(
-                    presentation.identity,
-                    presentation.smallIdentity,
-                  )}
-                >
-                  <AppIcon name="map" />
-                </span>
-              }
-              description={`全部硬条件通过，评分 ≥ ${Math.round(settings.threshold * 100)}%`}
+            >
+              {!settingsLoaded
+                ? "正在读取"
+                : identityReady
+                  ? identity.name
+                  : identity.name
+                    ? "拼音未填写完整"
+                    : "尚未填写"}
+            </PropertyControl>
+          </PropertyRow>
+          <PropertyRow label="生日" icon="calendar">
+            {identity.birthMonth} 月 {identity.birthDay} 日
+          </PropertyRow>
+          <PropertyRow label="选岛目标" isControl>
+            <PropertyControl
+              label="编辑选岛目标"
+              icon="target"
               onClick={() => setEditing("target")}
-              endContent={<AppIcon name="right" />}
-            />
-          </List>
-          {!identityReady && settingsLoaded && (
-            <Text color="secondary">开始前请补全岛民资料。</Text>
-          )}
-        </VStack>
-        <Divider />
-        <VStack gap={3} role="region" aria-label="连接状态">
-          <HStack hAlign="between" vAlign="center">
-            <Text as="h2" type="large" weight="semibold">
-              连接状态
-            </Text>
-            <Button
-              label="管理设备"
-              variant="ghost"
-              size="sm"
-              onClick={() => void navigate({ to: "/settings" })}
-            />
-          </HStack>
-          <List density="compact">
-            <ListItem
-              label="后端服务"
-              endContent={
-                <ConnectionState
-                  connected={connectionStatus === "connected"}
-                  label={connectionStatus === "connected" ? "已连接" : "未响应"}
-                />
+            >
+              硬条件全部通过，≥ {Math.round(settings.threshold * 100)}%
+            </PropertyControl>
+          </PropertyRow>
+          <PropertyRow label="按键" icon="keyboard">
+            {settings.dryRun ? "演练，不发送" : "发送到 Switch"}
+          </PropertyRow>
+        </PropertyList>
+      </Section>
+      <Section
+        title="连接"
+        isInset
+        actions={
+          <Button
+            label="管理设备"
+            variant="ghost"
+            size="sm"
+            onClick={() =>
+              void navigate({ to: "/settings", search: { tab: "devices" } })
+            }
+          />
+        }
+      >
+        <PropertyList label="连接状态">
+          <PropertyRow label="后端">
+            <StatusLabel
+              tone={
+                connectionStatus === "connected"
+                  ? "success"
+                  : connectionStatus === "disconnected"
+                    ? "error"
+                    : "warning"
+              }
+              label={
+                connectionStatus === "connected"
+                  ? "已连接"
+                  : connectionStatus === "disconnected"
+                    ? "未响应"
+                    : "正在恢复"
               }
             />
-            <ListItem
-              label="视频采集"
-              endContent={
-                <ConnectionState
-                  label={capture.connected ? "在线" : "未就绪"}
-                  connected={capture.connected}
-                />
+          </PropertyRow>
+          <PropertyRow label="采集">
+            <StatusLabel
+              tone={capture.connected ? "success" : "warning"}
+              label={
+                !capture.connected
+                  ? "采集卡未就绪"
+                  : capture.width
+                    ? `${capture.width}×${capture.height}`
+                    : "在线"
               }
             />
-            <ListItem
-              label={settings.dryRun ? "演练模式" : "手柄连接"}
-              endContent={
-                <ConnectionState
-                  label={
-                    settings.dryRun
-                      ? "不发按键"
-                      : controller.connected
-                        ? "已连接"
-                        : "未连接"
-                  }
-                  connected={controller.connected}
-                />
-              }
-            />
-          </List>
-        </VStack>
-      </VStack>
+          </PropertyRow>
+          <PropertyRow label="手柄">
+            {firmwareBusy ? (
+              <StatusLabel tone="warning" label="固件任务进行中" />
+            ) : settings.dryRun ? (
+              <StatusLabel tone="neutral" label="演练模式无需连接" />
+            ) : (
+              <StatusLabel
+                tone={controller.connected ? "success" : "warning"}
+                label={controller.connected ? "已连接" : "未连接"}
+              />
+            )}
+          </PropertyRow>
+        </PropertyList>
+        {!settings.dryRun && !controller.connected && !firmwareBusy && (
+          <Text
+            type="supporting"
+            color="secondary"
+            xstyle={ui.sectionInset}
+          >
+            {controller.message}
+          </Text>
+        )}
+      </Section>
       <StandardDialog
         open={editing !== null}
         title={editing === "identity" ? "岛民资料" : "选岛目标"}
@@ -152,6 +146,6 @@ export function RunConfiguration() {
           <TargetPanel />
         ) : null}
       </StandardDialog>
-    </>
+    </div>
   );
 }

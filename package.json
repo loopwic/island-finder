@@ -18,6 +18,11 @@
     "apps/*",
     "services/*"
   ],
+  "browserslist": [
+    "chrome >= 123",
+    "safari >= 17.5",
+    "firefox >= 120"
+  ],
   "engines": {
     "node": ">=22.12.0",
     "npm": ">=10"

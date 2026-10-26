@@ -2,14 +2,20 @@ import { Button } from "@astryxdesign/core/Button";
 import { Selector } from "@astryxdesign/core/Selector";
 import { HStack, VStack } from "@astryxdesign/core/Layout";
 import { Text } from "@astryxdesign/core/Text";
-import { Token } from "@astryxdesign/core/Token";
+import { StatusLabel } from "../core/status-label";
 import { Collapsible } from "@astryxdesign/core/Collapsible";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useConsole } from "../../app/console-context";
 import { backend, type CaptureDevice } from "../../backend/client";
 import { CapturePreview } from "../console/capture-preview";
-import { Panel, ErrorDialog } from "../core/panel";
+import { Section, ErrorDialog } from "../core/panel";
 import { AppIcon } from "../core/icons";
+import { errorMessage } from "../../domain/errors";
+
+// Devices are bound by their stable hardware ID; the OS index can change
+// between launches and is only a fallback for devices that report no ID.
+const deviceKey = (device: { id?: string; index: number }) =>
+  device.id || `index:${device.index}`;
 
 export function CaptureSettings() {
   const { capture, settings, settingsLoaded, active, updateSettings } =
@@ -23,7 +29,7 @@ export function CaptureSettings() {
     try {
       setDevices((await backend.captureDevices()).devices);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(errorMessage(reason));
     } finally {
       setLoading(false);
     }
@@ -31,47 +37,50 @@ export function CaptureSettings() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+  const selectedKey = deviceKey({
+    id: settings.captureDeviceId,
+    index: settings.captureDeviceIndex,
+  });
   const options = useMemo(() => {
     const result = devices.map((device) => ({
-      value: String(device.index),
+      value: deviceKey(device),
       label: device.name,
       description: `USB ${device.usbLinkMbps ?? "—"} Mbps，${device.transportCodec ?? "UVC"}`,
     }));
-    if (!devices.some((device) => device.index === settings.captureDeviceIndex))
+    if (!devices.some((device) => deviceKey(device) === selectedKey))
       result.unshift({
-        value: String(settings.captureDeviceIndex),
+        value: selectedKey,
         label: settings.captureDeviceName || "未识别的视频设备",
         description: "当前不可用",
       });
     return result;
-  }, [devices, settings.captureDeviceIndex, settings.captureDeviceName]);
+  }, [devices, selectedKey, settings.captureDeviceName]);
   return (
     <>
-      <Panel
+      <Section
         title="视频采集"
-        icon={<AppIcon name="camera" />}
         description="选择连接 Switch 的 UVC 采集卡"
         actions={
-          <Token
+          <StatusLabel
+            tone={capture.connected ? "success" : "neutral"}
             label={capture.connected ? "在线" : "离线"}
-            color={capture.connected ? "green" : "default"}
           />
         }
       >
-        <VStack gap={4}>
-          <HStack gap={3} vAlign="end">
+        <VStack gap={3}>
+          <HStack gap={2} vAlign="end">
             <Selector
               label="视频采集设备"
               isLabelHidden
               width="100%"
-              value={String(settings.captureDeviceIndex)}
+              value={selectedKey}
               options={options}
               isDisabled={
                 active || !settingsLoaded || loading || !devices.length
               }
               onChange={(value) => {
                 const device = devices.find(
-                  (item) => item.index === Number(value),
+                  (item) => deviceKey(item) === value,
                 );
                 if (device)
                   updateSettings({
@@ -89,11 +98,6 @@ export function CaptureSettings() {
               clickAction={refresh}
             />
           </HStack>
-          <HStack hAlign="between" vAlign="center" gap={3}>
-            <Text color="secondary">
-              {loading ? "正在读取设备" : `${devices.length} 张外接采集卡`}
-            </Text>
-          </HStack>
           {capture.connected ? (
             <Collapsible
               defaultIsOpen={false}
@@ -105,11 +109,15 @@ export function CaptureSettings() {
             </Collapsible>
           ) : (
             <Text color="secondary">
-              {capture.error ?? "连接采集卡后刷新设备列表。"}
+              {loading
+                ? "正在读取设备"
+                : !devices.length
+                  ? "未检测到外接采集卡，请检查 USB 连接后刷新"
+                  : (capture.error ?? "采集卡尚未输出画面")}
             </Text>
           )}
         </VStack>
-      </Panel>
+      </Section>
       <ErrorDialog
         title="设备列表读取失败"
         error={error}

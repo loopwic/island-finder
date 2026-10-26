@@ -3,19 +3,23 @@ import {
   backend,
   type BackendState,
   type BackendStateStreamMessage,
+  type RuntimeAction,
 } from '../backend/client';
 import type { BackendConnectionStatus } from '../backend/connection';
 import { detectNameInputMode, normalizePinyin, validateName } from '../domain/name-input';
 import { DEFAULT_SETTINGS, INITIAL_RUNTIME } from '../domain/defaults';
+import { errorMessage } from '../domain/errors';
 import { loadSettings } from '../domain/storage';
 import type { FinderSettings } from '../domain/types';
 import { referenceFromFile } from '../vision/features';
+
+type SettingsSyncState = 'loading' | 'saving' | 'saved' | 'error';
 
 type ConsoleContextValue = {
   state: BackendState | null;
   settings: FinderSettings;
   settingsLoaded: boolean;
-  settingsSyncState: 'loading' | 'saving' | 'saved' | 'error';
+  settingsSyncState: SettingsSyncState;
   runtime: BackendState['runtime'];
   capture: BackendState['capture'];
   controller: BackendState['controller'];
@@ -27,16 +31,17 @@ type ConsoleContextValue = {
   connectionError: string | null;
   active: boolean;
   identityReady: boolean;
-  ready: boolean;
+  /** Why automation cannot start right now, or null when every gate passes. */
+  startBlocker: string | null;
   updateSettings: (patch: Partial<FinderSettings>) => void;
   updateIdentity: (patch: Partial<FinderSettings['identity']>) => void;
   updateName: (value: string) => void;
   updatePinyin: (index: number, value: string) => void;
-  runAction: (name: string) => Promise<void>;
+  runAction: (name: RuntimeAction) => Promise<void>;
   addTargets: (files: FileList | null) => Promise<void>;
   removeTarget: (id: string) => void;
   clearLogs: () => Promise<void>;
-  reconnect: () => Promise<void>;
+  reconnect: () => void;
 };
 
 const ConsoleContext = createContext<ConsoleContextValue | null>(null);
@@ -50,11 +55,37 @@ function isIdentityReady(identity: FinderSettings['identity']): boolean {
   }
 }
 
+function describeStartBlocker({
+  connected,
+  settingsLoaded,
+  firmwareBusy,
+  captureConnected,
+  identityReady,
+  dryRun,
+  controllerConnected,
+}: {
+  connected: boolean;
+  settingsLoaded: boolean;
+  firmwareBusy: boolean;
+  captureConnected: boolean;
+  identityReady: boolean;
+  dryRun: boolean;
+  controllerConnected: boolean;
+}): string | null {
+  if (!connected) return '后端尚未连接';
+  if (!settingsLoaded) return '正在读取后端配置';
+  if (firmwareBusy) return '固件任务进行中，完成后才能开始';
+  if (!captureConnected) return '采集卡未就绪，请检查连接或在设备页重新选择';
+  if (!identityReady) return '请先补全岛民名字和拼音';
+  if (!dryRun && !controllerConnected) return '手柄未连接；可先开启演练模式只检查识别';
+  return null;
+}
+
 export function ConsoleProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<BackendState | null>(null);
   const [settings, setSettings] = useState<FinderSettings>(() => structuredClone(DEFAULT_SETTINGS));
   const [settingsLoaded, setSettingsLoaded] = useState(false);
-  const [settingsSyncState, setSettingsSyncState] = useState<'loading' | 'saving' | 'saved' | 'error'>('loading');
+  const [settingsSyncState, setSettingsSyncState] = useState<SettingsSyncState>('loading');
   const [notice, setNotice] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<BackendConnectionStatus>('connecting');
   const [connectionError, setConnectionError] = useState<string | null>(null);
@@ -123,7 +154,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         } catch (error) {
           if (cancelled) return;
           setSettingsSyncState('error');
-          setNotice(error instanceof Error ? error.message : String(error));
+          setNotice(errorMessage(error));
         } finally {
           hydratingSettings = false;
         }
@@ -179,7 +210,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         });
       } catch (error) {
         setConnectionStatus('recovering');
-        setConnectionError(error instanceof Error ? error.message : String(error));
+        setConnectionError(errorMessage(error));
         scheduleReconnect();
       }
     };
@@ -222,38 +253,44 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const reconnect = async () => {
+  const reconnect = () => {
     setConnectionStatus('connecting');
     setConnectionError(null);
     reconnectStateStream.current?.();
   };
 
+  const cancelScheduledSave = () => {
+    if (saveTimer.current === null) return;
+    window.clearTimeout(saveTimer.current);
+    saveTimer.current = null;
+  };
+
+  // Saves one settings snapshot. A response that arrives after a newer edit is
+  // ignored (success or failure) because that edit schedules its own save.
+  const persistSettings = async (next: FinderSettings): Promise<void> => {
+    const editRevision = settingsEditRevision.current;
+    const isCurrent = () => editRevision === settingsEditRevision.current;
+    try {
+      const saved = await backend.saveSettings(next);
+      if (!isCurrent()) return;
+      settingsDirty.current = false;
+      setSettings(saved);
+      setSettingsSyncState('saved');
+    } catch (error) {
+      if (!isCurrent()) return;
+      setSettingsSyncState('error');
+      throw error;
+    }
+  };
 
   useEffect(() => {
     if (!settingsLoaded || !settingsDirty.current) return;
-    if (saveTimer.current !== null) window.clearTimeout(saveTimer.current);
-    const editRevision = settingsEditRevision.current;
+    cancelScheduledSave();
     saveTimer.current = window.setTimeout(() => {
       saveTimer.current = null;
-      void backend.saveSettings(settings)
-        .then((saved) => {
-          if (editRevision !== settingsEditRevision.current) return;
-          settingsDirty.current = false;
-          setSettings(saved);
-          setSettingsSyncState('saved');
-        })
-        .catch((error) => {
-          if (editRevision !== settingsEditRevision.current) return;
-          setSettingsSyncState('error');
-          setNotice(error instanceof Error ? error.message : String(error));
-        });
+      persistSettings(settings).catch((error) => setNotice(errorMessage(error)));
     }, 450);
-    return () => {
-      if (saveTimer.current !== null) {
-        window.clearTimeout(saveTimer.current);
-        saveTimer.current = null;
-      }
-    };
+    return cancelScheduledSave;
   }, [settings, settingsLoaded]);
 
   const markSettingsDirty = (): boolean => {
@@ -313,29 +350,20 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
     });
   };
 
-  const runAction = async (name: string) => {
+  const runAction = async (name: RuntimeAction) => {
     try {
       if (!state?.instanceId) throw new Error('后端会话尚未就绪，请稍后重试');
       if (name === 'start' && !settingsLoaded) throw new Error('后端配置尚未读取完成，请稍后重试');
-      if (saveTimer.current !== null) {
-        window.clearTimeout(saveTimer.current);
-        saveTimer.current = null;
-      }
-      if (settingsDirty.current) {
-        const editRevision = settingsEditRevision.current;
-        const saved = await backend.saveSettings(settings);
-        if (editRevision === settingsEditRevision.current) {
-          settingsDirty.current = false;
-          setSettings(saved);
-          setSettingsSyncState('saved');
-        }
-      }
+      // The backend must act on the settings the user sees, so flush any
+      // pending autosave before sending the action.
+      cancelScheduledSave();
+      if (settingsDirty.current) await persistSettings(settings);
       const startToken = name === 'start'
         ? (await backend.armStart(state.instanceId)).startToken
         : undefined;
       setState(await backend.action(name, state.instanceId, startToken));
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error));
+      setNotice(errorMessage(error));
     }
   };
 
@@ -346,7 +374,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       if (!markSettingsDirty()) return;
       setSettings((current) => ({ ...current, targets: [...current.targets, ...references] }));
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error));
+      setNotice(errorMessage(error));
     }
   };
 
@@ -360,20 +388,16 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
 
   const retrySettings = async () => {
     setNotice(null);
-    if (!settingsLoaded) { await reconnect(); return; }
-    if (saveTimer.current !== null) { window.clearTimeout(saveTimer.current); saveTimer.current = null; }
-    const editRevision = settingsEditRevision.current;
+    if (!settingsLoaded) {
+      reconnect();
+      return;
+    }
+    cancelScheduledSave();
     setSettingsSyncState('saving');
     try {
-      const saved = await backend.saveSettings(settings);
-      if (editRevision === settingsEditRevision.current) {
-        settingsDirty.current = false;
-        setSettings(saved);
-        setSettingsSyncState('saved');
-      }
+      await persistSettings(settings);
     } catch (error) {
-      setSettingsSyncState('error');
-      setNotice(error instanceof Error ? error.message : String(error));
+      setNotice(errorMessage(error));
     }
   };
 
@@ -382,7 +406,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       await backend.clearLogs();
       setState((current) => current ? { ...current, logs: [] } : current);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error));
+      setNotice(errorMessage(error));
     }
   };
 
@@ -404,7 +428,15 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   const logs = state?.logs ?? [];
   const active = !['idle', 'paused', 'error'].includes(runtime.phase);
   const identityReady = settingsLoaded && isIdentityReady(settings.identity);
-  const ready = settingsLoaded && !state?.firmware?.busy && capture.connected && identityReady && (settings.dryRun || controller.connected);
+  const startBlocker = describeStartBlocker({
+    connected: connectionStatus === 'connected' && state !== null,
+    settingsLoaded,
+    firmwareBusy: Boolean(state?.firmware?.busy),
+    captureConnected: capture.connected,
+    identityReady,
+    dryRun: settings.dryRun,
+    controllerConnected: controller.connected,
+  });
 
   return (
     <ConsoleContext.Provider value={{
@@ -423,7 +455,7 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       connectionError,
       active,
       identityReady,
-      ready,
+      startBlocker,
       updateSettings,
       updateIdentity,
       updateName,

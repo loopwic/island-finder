@@ -1,12 +1,10 @@
 import { Button } from "@astryxdesign/core/Button";
-import { FormLayout } from "@astryxdesign/core/FormLayout";
 import { Switch } from "@astryxdesign/core/Switch";
-import { HStack } from "@astryxdesign/core/Layout";
-import { Text } from "@astryxdesign/core/Text";
-import { Token } from "@astryxdesign/core/Token";
+import { VStack } from "@astryxdesign/core/Layout";
+import { StatusLabel } from "../core/status-label";
 import { useConsole } from "../../app/console-context";
-import { Panel } from "../core/panel";
-import { AppIcon } from "../core/icons";
+import { Section } from "../core/panel";
+import { SettingRow } from "../core/setting-row";
 
 export function ControllerSettings() {
   const {
@@ -15,60 +13,67 @@ export function ControllerSettings() {
     settingsLoaded,
     active,
     state,
+    runtime,
     updateSettings,
     runAction,
   } = useConsole();
   const disabled = active || !settingsLoaded;
+  // The backend refuses a dry-run switch mid-run, including while paused.
+  const runStopped = runtime.phase === "idle" || runtime.phase === "error";
   return (
-    <Panel
+    <Section
       title="手柄连接"
-      icon={<AppIcon name="cpu" />}
       description="ESP32-S3 模拟 Pro Controller"
       actions={
-        <Token
+        <StatusLabel
+          tone={controller.connected ? "success" : "neutral"}
           label={controller.connected ? "已连接" : "未连接"}
-          color={controller.connected ? "green" : "default"}
         />
       }
     >
-      <HStack hAlign="between" vAlign="center" gap={4}>
-        <Text color="secondary">{controller.message}</Text>
-        <Button
-          label={controller.active ? "停止配对" : "启动配对"}
-          isDisabled={Boolean(state?.firmware?.busy)}
-          clickAction={() =>
-            runAction(
-              controller.active
-                ? "controller-disconnect"
-                : "controller-connect",
-            )
-          }
-        />
-      </HStack>
-      <FormLayout>
-        <Switch
+      <VStack gap={0}>
+        <SettingRow label="配对" description={controller.message}>
+          <Button
+            label={controller.active ? "停止配对" : "启动配对"}
+            size="sm"
+            isDisabled={Boolean(state?.firmware?.busy)}
+            clickAction={() =>
+              runAction(
+                controller.active
+                  ? "controller-disconnect"
+                  : "controller-connect",
+              )
+            }
+          />
+        </SettingRow>
+        <SettingRow
           label="自动连接手柄"
           description="打开应用后寻找已配置的手柄服务"
-          labelPosition="start"
-          labelSpacing="spread"
-          width="100%"
-          value={settings.autoConnectController}
-          isDisabled={disabled}
-          onChange={(autoConnectController) =>
-            updateSettings({ autoConnectController })
-          }
-        />
-        <Switch
+        >
+          <Switch
+            label="自动连接手柄"
+            isLabelHidden
+            value={settings.autoConnectController}
+            isDisabled={disabled}
+            onChange={(autoConnectController) =>
+              updateSettings({ autoConnectController })
+            }
+          />
+        </SettingRow>
+        <SettingRow
           label="演练模式"
           description="只进行识别和状态推进，不发送真实按键"
-          labelPosition="start"
-          labelSpacing="spread"
-          width="100%"
-          value={settings.dryRun}
-          isDisabled={disabled}
-          onChange={(dryRun) => updateSettings({ dryRun })}
-        />
-      </FormLayout>
-    </Panel>
+        >
+          <Switch
+            label="演练模式"
+            isLabelHidden
+            value={settings.dryRun}
+            isDisabled={!runStopped || !settingsLoaded}
+            disabledMessage={runStopped ? undefined : "停止自动选岛后才能切换"}
+            onChange={(dryRun) => updateSettings({ dryRun })}
+          />
+        </SettingRow>
+      </VStack>
+    </Section>
   );
 }

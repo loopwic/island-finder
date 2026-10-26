@@ -1,5 +1,4 @@
 import { Button } from "@astryxdesign/core/Button";
-import { Banner } from "@astryxdesign/core/Banner";
 import {
   Layout,
   LayoutHeader,
@@ -9,8 +8,10 @@ import {
   VStack,
 } from "@astryxdesign/core/Layout";
 import { List, ListItem } from "@astryxdesign/core/List";
+import { Heading } from "@astryxdesign/core/Heading";
 import { Text } from "@astryxdesign/core/Text";
-import { Token } from "@astryxdesign/core/Token";
+import * as stylex from "@stylexjs/stylex";
+import { StatusLabel } from "../components/core/status-label";
 import { useMediaQuery } from "@astryxdesign/core/hooks";
 import { useEffect, useState } from "react";
 import { useAudits } from "../components/audit/use-audits";
@@ -22,6 +23,10 @@ import {
 } from "../components/audit/audit-display";
 import { EmptyView, ErrorDialog } from "../components/core/panel";
 import { auditStyles } from "../components/audit/audit.stylex";
+import { pageStyles } from "../components/core/page.stylex";
+import { shellStyles } from "../app/shell.stylex";
+import { Notice } from "../components/core/notice";
+import { AppIcon } from "../components/core/icons";
 
 export function AuditPage() {
   const a = useAudits();
@@ -40,18 +45,15 @@ export function AuditPage() {
       height={narrow ? "auto" : "fill"}
       padding={0}
       header={
-        <LayoutHeader hasDivider padding={0}>
-          <HStack
-            hAlign="between"
-            vAlign="center"
-            paddingBlock={4}
-            paddingInline={5}
-          >
-            <Text weight="semibold">选图记录</Text>
-            <Text color="secondary">
+        <LayoutHeader padding={0}>
+          <div {...stylex.props(auditStyles.recordsHeader)}>
+            <Heading level={5} accessibilityLevel={2}>
+              选图记录
+            </Heading>
+            <Text type="supporting" color="secondary" hasTabularNumbers>
               {a.audits.length} / {a.limit}
             </Text>
-          </HStack>
+          </div>
         </LayoutHeader>
       }
       content={
@@ -60,7 +62,7 @@ export function AuditPage() {
           xstyle={narrow ? auditStyles.mobileRecords : undefined}
         >
           <List
-            density="balanced"
+            density="compact"
             aria-label="选图记录"
             xstyle={auditStyles.records}
           >
@@ -72,22 +74,23 @@ export function AuditPage() {
                 onClick={() => a.setSelectedId(record.id)}
                 label={
                   <HStack hAlign="between" vAlign="center" gap={2}>
-                    <Text weight="semibold">{runLabel(record.runNumber)}</Text>
-                    <Token
+                    <Text weight="medium">{runLabel(record.runNumber)}</Text>
+                    <StatusLabel
+                      size="supporting"
                       {...(auditLabels[record.status] ?? auditLabels.stopped)}
                     />
                   </HStack>
                 }
                 description={
-                  <VStack gap={1}>
-                    <Text size="sm" color="secondary" maxLines={1}>
+                  <VStack gap={0.5}>
+                    <Text type="supporting" color="secondary" maxLines={1}>
                       {record.summary}
                     </Text>
                     <HStack hAlign="between" gap={2}>
-                      <Text size="sm" color="secondary">
+                      <Text type="supporting" color="secondary" hasTabularNumbers>
                         {formatAuditTime(record.createdAt)}
                       </Text>
-                      <Text size="sm">
+                      <Text type="supporting" hasTabularNumbers>
                         {record.bestScore === null
                           ? "无评分"
                           : `${(record.bestScore * 100).toFixed(1)}%`}
@@ -136,20 +139,33 @@ export function AuditPage() {
           padding={0}
           start={
             narrow ? undefined : (
-              <LayoutPanel width={300} padding={0} hasDivider label="选图记录">
+              <LayoutPanel
+                width={300}
+                padding={0}
+                hasDivider
+                label="选图记录"
+                xstyle={shellStyles.startDivider}
+              >
                 {records}
               </LayoutPanel>
             )
           }
           content={
-            <LayoutContent padding={narrow ? 4 : 6}>
+            <LayoutContent padding={0} xstyle={pageStyles.reading}>
               <VStack gap={6}>
                 {error && (
-                  <Banner
+                  <Notice
                     status="warning"
                     title="当前显示上一次读取结果"
                     description="连接恢复后会自动刷新，历史记录不会被清除。"
-                    endContent={<Button label="重新读取" onClick={retry} />}
+                    action={
+                      <Button
+                        label="重新读取"
+                        size="sm"
+                        icon={<AppIcon name="refresh" size={14} />}
+                        onClick={retry}
+                      />
+                    }
                   />
                 )}
                 {narrow && records}
